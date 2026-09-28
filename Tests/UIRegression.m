@@ -69,7 +69,8 @@ int main(int argc, const char *argv[]) {
         CheckUI([Cal() component:NSCalendarUnitMonth fromDate:app.month] == 1, @"exact month jump rebuilds correct window");
         CheckUI([Cal() isDate:app.overviewBaseMonth equalToDate:app.month toUnitGranularity:NSCalendarUnitMonth], @"cached month matches jump target");
         CheckUI(app.themePicker.numberOfItems == 6, @"six named pastel themes available");
-        CheckUI(ThemeIndex(@"unknown-theme") == 0 && ThemeIndex(@42) == 0, @"invalid preference falls back to sage");
+        CheckUI(ThemeIndex(@"unknown-theme") == 1 && ThemeIndex(@42) == 1, @"invalid preference falls back to blue");
+        CheckUI(app.root.gradientEnd != nil && app.agenda.gradientEnd != nil, @"main surfaces use soft gradients");
         NSButton *today = [NSButton new]; today.tag = 0; [app navigateCalendar:today];
         [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
         NSDate *selectedDay = app.selectedDay, *month = app.month;
@@ -78,7 +79,7 @@ int main(int argc, const char *argv[]) {
         for (NSInteger i = 0; i < 6; i++) {
             OverviewGrid *oldGrid = FirstGrid(app);
             [app.themePicker selectItemAtIndex:i]; [app changeTheme:app.themePicker];
-            CheckUI(CurrentTheme == i && [app.root.fill isEqual:Canvas()] && [app.agenda.fill isEqual:Panel()], @"theme recolors persistent surfaces");
+            CheckUI(CurrentTheme == i && [app.root.fill isEqual:Canvas()] && [app.root.gradientEnd isEqual:Panel()] && [app.agenda.fill isEqual:Panel()] && [app.agenda.gradientEnd isEqual:Canvas()], @"theme recolors persistent gradients");
             CheckUI(FirstGrid(app) != oldGrid, @"theme invalidates cached calendar colors");
             CheckUI([app.selectedDay isEqual:selectedDay] && [app.month isEqual:month] && [app.tasks isEqual:tasksBeforeTheme], @"theme preserves dates and tasks");
             CheckUI(NSEqualPoints(app.calendarScroll.contentView.bounds.origin, scrollBeforeTheme), @"theme preserves calendar scroll");

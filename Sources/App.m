@@ -8,19 +8,19 @@ static NSColor *Adaptive(unsigned light, unsigned dark) { return RGB(light); }
 typedef struct { unsigned canvas, panel, tint, emphasis, line, ink, muted, accent; } PastelPalette;
 static const PastelPalette Palettes[] = {
     {0xF8FAF7, 0xEFF4EC, 0xE5EFE1, 0xD3E5CB, 0xDCE5D7, 0x2E3C30, 0x5E6D60, 0x3D6245},
-    {0xF7FAFC, 0xEDF3F8, 0xE1EDF7, 0xCDDFEF, 0xD8E3EC, 0x2D3C49, 0x596E7E, 0x385F7D},
+    {0xF7FAFF, 0xEBF3FE, 0xDDEBFC, 0xC9E0FB, 0xD8E5F4, 0x20334A, 0x62778E, 0x2766B0},
     {0xFAF8FC, 0xF2EEF8, 0xEAE3F4, 0xDED2ED, 0xE3DCED, 0x3D344A, 0x6D617B, 0x665080},
     {0xFCF8FA, 0xF8EEF2, 0xF5E2EA, 0xEED0DD, 0xEEDCE4, 0x4A3540, 0x7B606D, 0x7C4B63},
     {0xFCF9F6, 0xF8F0E9, 0xF6E6D9, 0xEFD7C2, 0xECDDCE, 0x48392E, 0x796555, 0x795334},
     {0xFCFBF6, 0xF7F3E5, 0xF2ECD3, 0xE9DFAF, 0xE8E1CA, 0x423E2E, 0x726B50, 0x726032}
 };
-static NSInteger CurrentTheme = 0;
+static NSInteger CurrentTheme = 1;
 static NSString * const ThemePreferenceKey = @"ddl-manager.theme.v1";
 static NSArray<NSString *> *ThemeIDs(void) { return @[@"sage", @"blue", @"lavender", @"rose", @"peach", @"cream"]; }
 static NSArray<NSString *> *ThemeNames(void) { return @[@"鼠尾草", @"雾蓝", @"薰衣草", @"樱花", @"蜜桃", @"奶油"]; }
 static NSInteger ThemeIndex(id identifier) {
     NSUInteger index = [ThemeIDs() indexOfObject:identifier ?: @""];
-    return index == NSNotFound ? 0 : (NSInteger)index;
+    return index == NSNotFound ? 1 : (NSInteger)index;
 }
 static NSColor *Ink(void) { return RGB(Palettes[CurrentTheme].ink); }
 static NSColor *Muted(void) { return RGB(Palettes[CurrentTheme].muted); }
@@ -50,6 +50,7 @@ static void DrawText(NSString *text, NSRect rect, CGFloat size, NSFontWeight wei
 
 @interface Surface : NSView
 @property NSColor *fill;
+@property NSColor *gradientEnd;
 @property NSColor *stroke;
 @property CGFloat radius;
 @property(copy) void (^onResize)(void);
@@ -58,7 +59,10 @@ static void DrawText(NSString *text, NSRect rect, CGFloat size, NSFontWeight wei
 - (BOOL)isFlipped { return YES; }
 - (void)drawRect:(NSRect)dirtyRect {
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5) xRadius:self.radius yRadius:self.radius];
-    if (self.fill) { [self.fill setFill]; [path fill]; }
+    if (self.fill) {
+        if (self.gradientEnd) [[[NSGradient alloc] initWithStartingColor:self.fill endingColor:self.gradientEnd] drawInBezierPath:path angle:-70];
+        else { [self.fill setFill]; [path fill]; }
+    }
     if (self.stroke) { [self.stroke setStroke]; [path stroke]; }
 }
 - (void)setFrameSize:(NSSize)size { [super setFrameSize:size]; if (self.onResize) self.onResize(); }
@@ -89,7 +93,10 @@ static void DrawText(NSString *text, NSRect rect, CGFloat size, NSFontWeight wei
     NSColor *fill = self.tone == 1 ? Emphasis() : (self.selected || self.tone == 2 ? Tint() : Card());
     if (self.tone == 3 && !self.selected && !self.hovered) fill = NSColor.clearColor;
     if (self.hovered || self.highlighted) fill = [fill blendedColorWithFraction:0.09 ofColor:Accent()];
-    [fill setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 1, 1) xRadius:8 yRadius:8] fill];
+    NSBezierPath *buttonPath = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 1, 1) xRadius:8 yRadius:8];
+    NSColor *end = self.tone == 1 ? Tint() : ((self.selected || self.tone == 2) ? Card() : fill);
+    if (self.tone == 1 || self.selected || self.tone == 2) [[[NSGradient alloc] initWithStartingColor:fill endingColor:end] drawInBezierPath:buttonPath angle:-70];
+    else { [fill setFill]; [buttonPath fill]; }
     NSColor *color = self.tone == 1 ? Accent() : (self.selected ? Accent() : Ink());
     if (!self.enabled) color = Muted();
     BOOL iconOnly = self.symbol.length && self.title.length == 0;
@@ -108,19 +115,20 @@ static ActionButton *Button(NSString *title, id target, SEL action, NSInteger to
     ActionButton *b = [[ActionButton alloc] initWithFrame:NSZeroRect]; b.title = title; b.target = target; b.action = action; b.tone = tone; [b setAccessibilityLabel:title]; return b;
 }
 static Surface *Box(NSColor *fill, CGFloat radius) { Surface *v = [Surface new]; v.fill = fill; v.radius = radius; return v; }
+static Surface *GradientBox(NSColor *start, NSColor *end, CGFloat radius) { Surface *v = Box(start, radius); v.gradientEnd = end; return v; }
 
 @interface ThemeSegmentedControl : NSSegmentedControl
 @end
 @implementation ThemeSegmentedControl
 - (void)drawRect:(NSRect)dirtyRect {
     NSRect bounds = NSInsetRect(self.bounds, 0.5, 0.5);
-    [Panel() setFill]; [[NSBezierPath bezierPathWithRoundedRect:bounds xRadius:9 yRadius:9] fill];
+    [[[NSGradient alloc] initWithStartingColor:Panel() endingColor:Canvas()] drawInBezierPath:[NSBezierPath bezierPathWithRoundedRect:bounds xRadius:9 yRadius:9] angle:-70];
     NSInteger count = self.segmentCount; if (!count) return;
     CGFloat width = NSWidth(bounds) / count;
     for (NSInteger index = 0; index < count; index++) {
         NSRect segment = NSMakeRect(NSMinX(bounds) + index * width, NSMinY(bounds), width, NSHeight(bounds));
         BOOL selected = index == self.selectedSegment;
-        if (selected) { [Emphasis() setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(segment, 1, 1) xRadius:8 yRadius:8] fill]; }
+        if (selected) [[[NSGradient alloc] initWithStartingColor:Emphasis() endingColor:Tint()] drawInBezierPath:[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(segment, 1, 1) xRadius:8 yRadius:8] angle:-70];
         else if (index > 0) { [Line() setStroke]; NSBezierPath *divider = [NSBezierPath bezierPath]; [divider moveToPoint:NSMakePoint(NSMinX(segment), NSMinY(segment) + 7)]; [divider lineToPoint:NSMakePoint(NSMinX(segment), NSMaxY(segment) - 7)]; [divider stroke]; }
         DrawText([self labelForSegment:index], NSInsetRect(segment, 4, 5), 12, selected ? NSFontWeightSemibold : NSFontWeightMedium, selected ? Accent() : Ink(), NSTextAlignmentCenter);
     }
@@ -151,7 +159,7 @@ static ThemeSegmentedControl *Segments(NSArray<NSString *> *labels, id target, S
     [bg setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 2, 2) xRadius:8 yRadius:8] fill];
     CGFloat numberX = self.compact ? (self.bounds.size.width - 24) / 2 : 8;
     if (self.today) {
-        [Emphasis() setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(numberX, 4, 24, 24) xRadius:12 yRadius:12] fill];
+        [[[NSGradient alloc] initWithStartingColor:Emphasis() endingColor:Tint()] drawInBezierPath:[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(numberX, 4, 24, 24) xRadius:12 yRadius:12] angle:-70];
     }
     DrawText(DDLFormatDate(self.date, @"d"), NSMakeRect(numberX, 7, 24, 19), 12, self.today || self.chosen ? NSFontWeightSemibold : NSFontWeightRegular, self.today ? Accent() : (self.inMonth ? Ink() : Muted()), NSTextAlignmentCenter);
     if (self.compact && self.tasks.count) {
@@ -219,11 +227,11 @@ static ThemeSegmentedControl *Segments(NSArray<NSString *> *labels, id target, S
 @end
 
 static NSColor *EventColor(NSDictionary *task) {
-    if ([task[@"completed"] boolValue]) return Adaptive(0x568369, 0xA6D5B6);
+    if ([task[@"completed"] boolValue]) return Accent();
     return [task[@"due"] timeIntervalSinceNow] < 0 ? Adaptive(0xB86154, 0xEFACA0) : Accent();
 }
 static NSColor *EventFill(NSDictionary *task) {
-    if ([task[@"completed"] boolValue]) return Adaptive(0xEAF2EB, 0x2C4336);
+    if ([task[@"completed"] boolValue]) return Tint();
     return [task[@"due"] timeIntervalSinceNow] < 0 ? Adaptive(0xF9EBE6, 0x49332E) : Tint();
 }
 
@@ -237,7 +245,7 @@ static NSColor *EventFill(NSDictionary *task) {
 - (void)invoke:(id)sender { if (self.onClick) self.onClick(); }
 - (void)drawRect:(NSRect)rect {
     BOOL done = [self.task[@"completed"] boolValue]; NSColor *ink = EventColor(self.task);
-    [EventFill(self.task) setFill]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0, 1) xRadius:5 yRadius:5] fill];
+    [[[NSGradient alloc] initWithStartingColor:EventFill(self.task) endingColor:Card()] drawInBezierPath:[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0, 1) xRadius:5 yRadius:5] angle:-70];
     CGFloat textY = (self.bounds.size.height - 16) / 2;
     DrawText(done ? @"✓" : ([self.task[@"due"] timeIntervalSinceNow] < 0 ? @"!" : @"○"), NSMakeRect(5, textY, 15, 16), 11, NSFontWeightSemibold, ink, NSTextAlignmentCenter);
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new]; style.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -273,6 +281,7 @@ static NSColor *EventFill(NSDictionary *task) {
         CalendarDayCell *cell = (CalendarDayCell *)view;
         BOOL selected = [calendar isDate:cell.date inSameDayAsDate:selection];
         cell.fill = selected ? Panel() : (cell.inMonth ? Card() : Canvas());
+        cell.gradientEnd = selected ? Tint() : (cell.inMonth ? Canvas() : nil);
         cell.stroke = selected ? Accent() : Line(); cell.needsDisplay = YES;
     }
 }
@@ -297,6 +306,7 @@ static NSColor *EventFill(NSDictionary *task) {
         NSArray *tasks = self.tasksByDay[[calendar startOfDayForDate:date]] ?: @[];
         CalendarDayCell *cell = [CalendarDayCell new]; cell.date = date; cell.inMonth = inMonth; cell.radius = 9;
         cell.fill = selected ? Panel() : (inMonth ? Card() : Canvas());
+        cell.gradientEnd = selected ? Tint() : (inMonth ? Canvas() : nil);
         cell.stroke = selected ? Accent() : Line();
         Put(self, cell, 8 + (i % 7) * cellW + 2, 36 + (i / 7) * cellH + 2, cellW - 4, cellH - 4);
         CallbackButton *hit = [[CallbackButton alloc] initWithFrame:cell.bounds]; hit.title = @""; hit.tone = 3; hit.accessibilityLabel = [NSString stringWithFormat:@"%@，%lu 项任务", DDLFormatDate(date, @"yyyy年M月d日 EEEE"), tasks.count]; hit.onClick = ^{ if (weakSelf.onSelect) weakSelf.onSelect(date, nil); }; [cell addSubview:hit];
@@ -418,7 +428,7 @@ static NSColor *EventFill(NSDictionary *task) {
     if ((self = [super initWithWindow:panel])) {
         self.appDelegate = owner; self.task = task;
         panel.title = task ? @"编辑 DDL" : @"新建 DDL"; panel.releasedWhenClosed = NO;
-        Surface *root = Box(Canvas(), 0); root.frame = NSMakeRect(0, 0, 642, 652); panel.contentView = root;
+        Surface *root = GradientBox(Canvas(), Panel(), 0); root.frame = NSMakeRect(0, 0, 642, 652); panel.contentView = root;
         Put(root, Text(task ? @"让计划更合适。" : @"给下一件事，留个位置。", 22, NSFontWeightSemibold, Ink()), 28, 23, 580, 32);
         Put(root, Text(@"写下任务，再选一个合适的截止时间。", 12, NSFontWeightRegular, Muted()), 28, 62, 580, 20);
         Put(root, Text(@"任务名称", 11, NSFontWeightMedium, Muted()), 28, 99, 380, 18);
@@ -434,7 +444,7 @@ static NSColor *EventFill(NSDictionary *task) {
         self.selectedDate = task[@"due"] ?: DDLParseDate(@"明天 23:59", NSDate.date, Cal());
         self.deadlineField = [[NSTextField alloc] initWithFrame:NSZeroRect]; self.deadlineField.stringValue = DDLFormatDate(self.selectedDate, @"yyyy-MM-dd HH:mm"); self.deadlineField.placeholderString = @"明天 20:00 / 下周五 / 2026-10-01 23:59"; self.deadlineField.delegate = self;
         Put(root, self.deadlineField, 28, 248, 586, 28);
-        self.calendar = [MonthView new]; self.calendar.fill = Card(); self.calendar.stroke = Line(); self.calendar.radius = 12; self.calendar.compact = YES; self.calendar.month = self.selectedDate; self.calendar.selection = self.selectedDate; self.calendar.tasks = @[];
+        self.calendar = [MonthView new]; self.calendar.fill = Card(); self.calendar.gradientEnd = Canvas(); self.calendar.stroke = Line(); self.calendar.radius = 12; self.calendar.compact = YES; self.calendar.month = self.selectedDate; self.calendar.selection = self.selectedDate; self.calendar.tasks = @[];
         Put(root, self.calendar, 28, 289, 282, 280); [self.calendar reload];
         __weak typeof(self) weakSelf = self;
         self.calendar.onSelect = ^(NSDate *date) { [weakSelf chooseDate:date]; };
@@ -529,7 +539,7 @@ static NSColor *EventFill(NSDictionary *task) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.preview = [NSProcessInfo.processInfo.arguments containsObject:@"--preview"];
     NSApp.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
-    CurrentTheme = self.preview ? 0 : ThemeIndex([NSUserDefaults.standardUserDefaults objectForKey:ThemePreferenceKey]);
+    CurrentTheme = self.preview ? 1 : ThemeIndex([NSUserDefaults.standardUserDefaults objectForKey:ThemePreferenceKey]);
     if (!self.preview) {
         NSArray *running = [NSRunningApplication runningApplicationsWithBundleIdentifier:NSBundle.mainBundle.bundleIdentifier];
         for (NSRunningApplication *other in running) if (other.processIdentifier != NSProcessInfo.processInfo.processIdentifier) {
@@ -561,20 +571,20 @@ static NSColor *EventFill(NSDictionary *task) {
     self.window.minSize = NSMakeSize(1100, 760); self.window.releasedWhenClosed = NO; self.window.delegate = self; self.window.movableByWindowBackground = YES;
     if (self.preview && [NSProcessInfo.processInfo.arguments containsObject:@"--compact"]) [self.window setContentSize:NSMakeSize(1100, 760)];
     self.window.backgroundColor = Canvas();
-    self.root = Box(Canvas(), 0); self.root.frame = NSMakeRect(0, 0, 1280, 840); self.window.contentView = self.root;
-    self.sidebar = Box(Panel(), 0); [self.root addSubview:self.sidebar];
-    self.header = Box(Canvas(), 0); [self.root addSubview:self.header];
+    self.root = GradientBox(Canvas(), Panel(), 0); self.root.frame = NSMakeRect(0, 0, 1280, 840); self.window.contentView = self.root;
+    self.sidebar = GradientBox(Panel(), Canvas(), 0); [self.root addSubview:self.sidebar];
+    self.header = GradientBox(Canvas(), Panel(), 0); [self.root addSubview:self.header];
     self.search = [[NSSearchField alloc] initWithFrame:NSZeroRect]; self.search.placeholderString = @"搜索任务、学科、备注"; self.search.delegate = self; self.search.sendsSearchStringImmediately = YES; self.search.font = [NSFont systemFontOfSize:12]; [self.root addSubview:self.search];
     self.viewMode = Segments(@[@"清单", @"总日历"], self, @selector(changeView:)); [self.root addSubview:self.viewMode];
     self.calendarStatus = Segments(@[@"全部", @"待完成", @"已完成"], self, @selector(changeCalendarStatus:)); [self.root addSubview:self.calendarStatus];
     self.calendarHint = Text(@"", 10, NSFontWeightRegular, Muted()); [self.root addSubview:self.calendarHint];
     self.sortMenu = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO]; [self.sortMenu addItemsWithTitles:@[@"按截止时间", @"按优先级"]]; self.sortMenu.target = self; self.sortMenu.action = @selector(sortChanged:); [self.root addSubview:self.sortMenu];
     self.scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect]; self.scroll.hasVerticalScroller = YES; self.scroll.autohidesScrollers = YES; self.scroll.drawsBackground = NO;
-    self.document = Box(Canvas(), 0); self.scroll.documentView = self.document; [self.root addSubview:self.scroll];
+    self.document = GradientBox(Canvas(), Panel(), 0); self.scroll.documentView = self.document; [self.root addSubview:self.scroll];
     self.calendarScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect]; self.calendarScroll.hasVerticalScroller = YES; self.calendarScroll.autohidesScrollers = NO; self.calendarScroll.drawsBackground = NO; self.calendarScroll.borderType = NSNoBorder;
-    self.calendarDocument = Box(Canvas(), 0); self.calendarScroll.documentView = self.calendarDocument; [self.root addSubview:self.calendarScroll]; self.calendarBaseMonth = self.month; self.calendarNeedsCenter = YES;
+    self.calendarDocument = GradientBox(Canvas(), Panel(), 0); self.calendarScroll.documentView = self.calendarDocument; [self.root addSubview:self.calendarScroll]; self.calendarBaseMonth = self.month; self.calendarNeedsCenter = YES;
     self.calendarScroll.contentView.postsBoundsChangedNotifications = YES; [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(calendarScrolled:) name:NSViewBoundsDidChangeNotification object:self.calendarScroll.contentView];
-    self.agenda = Box(Panel(), 14); [self.root addSubview:self.agenda];
+    self.agenda = GradientBox(Panel(), Canvas(), 14); [self.root addSubview:self.agenda];
     self.agendaScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect]; self.agendaScroll.hasVerticalScroller = YES; self.agendaScroll.autohidesScrollers = YES; self.agendaScroll.drawsBackground = NO;
     self.agendaDocument = Box(NSColor.clearColor, 0); self.agendaScroll.documentView = self.agendaDocument;
     self.themePicker = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
@@ -606,9 +616,9 @@ static NSColor *EventFill(NSDictionary *task) {
     CurrentTheme = ThemeIndex(sender.selectedItem.representedObject);
     if (!self.preview) [NSUserDefaults.standardUserDefaults setObject:ThemeIDs()[CurrentTheme] forKey:ThemePreferenceKey];
     self.window.backgroundColor = Canvas();
-    for (Surface *surface in @[self.root, self.header, self.document, self.calendarDocument]) { surface.fill = Canvas(); surface.needsDisplay = YES; }
-    self.sidebar.fill = Panel(); self.sidebar.needsDisplay = YES;
-    self.agenda.fill = Panel(); self.agenda.needsDisplay = YES;
+    for (Surface *surface in @[self.root, self.header, self.document, self.calendarDocument]) { surface.fill = Canvas(); surface.gradientEnd = Panel(); surface.needsDisplay = YES; }
+    self.sidebar.fill = Panel(); self.sidebar.gradientEnd = Canvas(); self.sidebar.needsDisplay = YES;
+    self.agenda.fill = Panel(); self.agenda.gradientEnd = Canvas(); self.agenda.needsDisplay = YES;
     self.calendarHint.textColor = Muted();
     // Rebuild cached colors while preserving the date, scroll position and filters.
     self.overviewSnapshot = nil;
@@ -726,7 +736,7 @@ static NSColor *EventFill(NSDictionary *task) {
 }
 - (void)renderSidebar {
     Clear(self.sidebar); CGFloat h = self.sidebar.bounds.size.height;
-    Surface *logo = Box(Emphasis(), 10); Put(self.sidebar, logo, 23, 64, 37, 37);
+    Surface *logo = GradientBox(Emphasis(), Tint(), 10); Put(self.sidebar, logo, 23, 64, 37, 37);
     NSTextField *mark = Text(@"✓", 23, NSFontWeightMedium, Accent()); mark.alignment = NSTextAlignmentCenter; Put(logo, mark, 0, 4, 37, 30);
     Put(self.sidebar, Text(@"DDL Manager", 15, NSFontWeightSemibold, Ink()), 70, 64, 130, 24);
     Put(self.sidebar, Text(@"一点计划，很多从容", 10, NSFontWeightRegular, Muted()), 70, 90, 130, 17);
@@ -738,7 +748,7 @@ static NSColor *EventFill(NSDictionary *task) {
         ActionButton *b = Button([NSString stringWithFormat:@"%@     %ld", names[i], (long)[self countFilter:i]], self, @selector(changeFilter:), 3); b.symbol = icons[i]; b.tag = i; b.selected = self.filter == i;
         Put(self.sidebar, b, 14, 216 + i * 41, 182, 36);
     }
-    Surface *tip = Box(Tint(), 12); Put(self.sidebar, tip, 18, h - 223, 174, 96);
+    Surface *tip = GradientBox(Tint(), Panel(), 12); Put(self.sidebar, tip, 18, h - 223, 174, 96);
     Put(tip, Text(@"留一点空白", 12, NSFontWeightSemibold, Accent()), 14, 14, 146, 20);
     NSTextField *tipText = Text(@"专注眼前的一件事。\n完成之后，记得休息一下。", 10, NSFontWeightRegular, Muted()); tipText.maximumNumberOfLines = 2; tipText.lineBreakMode = NSLineBreakByWordWrapping; Put(tip, tipText, 14, 42, 150, 42);
     ActionButton *notification = Button(@"提醒设置", self, @selector(showNotificationSettings:), 3); notification.symbol = @"bell"; Put(self.sidebar, notification, 16, h - 105, 176, 32);
@@ -762,7 +772,7 @@ static NSColor *EventFill(NSDictionary *task) {
     NSArray *subtitles = @[@"一步一步，就会完成", @"给今天一个清晰的节奏", @"把进步好好记下来"];
     CGFloat cardW = (w - 24) / 3;
     for (NSInteger i = 0; i < 3; i++) {
-        Surface *card = Box(i == 0 ? Tint() : Card(), 12); card.stroke = i == 0 ? nil : Line(); Put(self.header, card, i * (cardW + 12), 123, cardW, 88);
+        Surface *card = GradientBox(i == 0 ? Tint() : Card(), i == 0 ? Panel() : Canvas(), 12); card.stroke = i == 0 ? nil : Line(); Put(self.header, card, i * (cardW + 12), 123, cardW, 88);
         Put(card, Text(labels[i], 11, NSFontWeightMedium, i == 0 ? Accent() : Muted()), 16, 14, cardW - 74, 18);
         Put(card, Text([values[i] stringValue], 28, NSFontWeightSemibold, Ink()), cardW - 64, 9, 47, 40);
         Put(card, Text(subtitles[i], 10, NSFontWeightRegular, Muted()), 16, 58, cardW - 32, 17);
@@ -770,7 +780,7 @@ static NSColor *EventFill(NSDictionary *task) {
 }
 - (Surface *)taskRow:(NSDictionary *)task width:(CGFloat)w {
     BOOL completed = [task[@"completed"] boolValue], archived = [task[@"archived"] boolValue];
-    Surface *row = Box(Card(), 12); row.stroke = Line(); row.frame = NSMakeRect(0, 0, w, 98);
+    Surface *row = GradientBox(Card(), Canvas(), 12); row.stroke = Line(); row.frame = NSMakeRect(0, 0, w, 98);
     NSButton *check = [NSButton checkboxWithTitle:@"" target:self action:@selector(toggleTask:)]; check.identifier = task[@"id"]; check.state = completed ? NSControlStateValueOn : NSControlStateValueOff; check.toolTip = completed ? @"恢复待完成" : @"标记完成"; check.accessibilityLabel = [NSString stringWithFormat:@"%@：%@", check.toolTip, task[@"title"]]; Put(row, check, 17, 36, 22, 26);
     NSTextField *subject = Text(task[@"subject"], 10, NSFontWeightSemibold, Accent()); Put(row, subject, 53, 12, 155, 18);
     NSInteger p = [task[@"priority"] integerValue]; if (p > 0) Put(row, Text(p == 2 ? @"● 紧急" : @"● 重要", 10, NSFontWeightMedium, p == 2 ? NSColor.systemRedColor : Adaptive(0xA27725, 0xDDBA6F)), 213, 12, 80, 18);
@@ -792,7 +802,7 @@ static NSColor *EventFill(NSDictionary *task) {
 }
 
 - (Surface *)deletedRow:(NSDictionary *)task width:(CGFloat)w {
-    Surface *row = Box(Card(), 12); row.stroke = Line(); row.frame = NSMakeRect(0, 0, w, 98);
+    Surface *row = GradientBox(Card(), Canvas(), 12); row.stroke = Line(); row.frame = NSMakeRect(0, 0, w, 98);
     NSTextField *subject = Text(task[@"subject"], 10, NSFontWeightSemibold, Muted()); Put(row, subject, 17, 13, w - 220, 18);
     NSTextField *title = Text(task[@"title"], 15, NSFontWeightMedium, Muted()); title.selectable = YES; title.toolTip = task[@"title"];
     title.attributedStringValue = [[NSAttributedString alloc] initWithString:task[@"title"] attributes:@{NSFontAttributeName:[NSFont systemFontOfSize:15 weight:NSFontWeightMedium], NSForegroundColorAttributeName:Muted(), NSStrikethroughStyleAttributeName:@(NSUnderlineStyleSingle)}];
@@ -821,10 +831,10 @@ static NSColor *EventFill(NSDictionary *task) {
     Put(self.header, prev, 374, 34, 32, 32); Put(self.header, today, 410, 34, 52, 32); Put(self.header, next, 466, 34, 32, 32);
     ActionButton *list = Button(@"返回清单", self, @selector(openList:), 3); list.symbol = @"list.bullet"; Put(self.header, list, w - 252, 29, 112, 38);
     ActionButton *add = Button(@"新建 DDL", self, @selector(addTask:), 1); add.symbol = @"plus"; Put(self.header, add, w - 126, 29, 126, 38);
-    NSArray *colors = @[Ink(), Accent(), Adaptive(0x568369, 0xA6D5B6), Adaptive(0xB86154, 0xEFACA0)];
+    NSArray *colors = @[Ink(), Accent(), Accent(), Adaptive(0xB86154, 0xEFACA0)];
     NSMutableArray<NSTextField *> *summaryLabels = [NSMutableArray array];
     for (NSInteger i = 0; i < 4; i++) {
-        Surface *badge = Box(i == 0 ? Tint() : Card(), 7); Put(self.header, badge, i * 127, 82, 117, 28);
+        Surface *badge = GradientBox(i == 0 ? Tint() : Card(), i == 0 ? Panel() : Canvas(), 7); Put(self.header, badge, i * 127, 82, 117, 28);
         NSTextField *label = Text(@"", 11, NSFontWeightMedium, colors[i]); Put(badge, label, 10, 6, 100, 18); [summaryLabels addObject:label];
     }
     self.calendarSummaryLabels = summaryLabels;
@@ -848,7 +858,7 @@ static NSColor *EventFill(NSDictionary *task) {
 }
 - (Surface *)agendaRow:(NSDictionary *)task width:(CGFloat)w {
     BOOL done = [task[@"completed"] boolValue];
-    Surface *row = Box(Card(), 11); row.stroke = [self.focusedTaskID isEqual:task[@"id"]] ? Accent() : Line();
+    Surface *row = GradientBox(Card(), Canvas(), 11); row.stroke = [self.focusedTaskID isEqual:task[@"id"]] ? Accent() : Line();
     Put(row, Text(task[@"subject"], 10, NSFontWeightSemibold, EventColor(task)), 14, 13, w - 83, 18);
     NSTextField *time = Text(DDLFormatDate(task[@"due"], @"HH:mm"), 11, NSFontWeightSemibold, Ink()); time.alignment = NSTextAlignmentRight; Put(row, time, w - 71, 12, 57, 20);
     NSTextField *title = Text(task[@"title"], 14, NSFontWeightMedium, done ? Muted() : Ink()); title.maximumNumberOfLines = 2; title.lineBreakMode = NSLineBreakByWordWrapping; title.selectable = YES; title.toolTip = task[@"title"];
@@ -883,7 +893,7 @@ static NSColor *EventFill(NSDictionary *task) {
             NSDate *month = [Cal() dateByAddingUnit:NSCalendarUnitMonth value:offset toDate:baseStart options:0];
             CGFloat sectionY = (offset + 6) * self.calendarSectionHeight;
             NSTextField *monthTitle = Text(DDLFormatDate(month, @"yyyy 年 M 月"), 18, NSFontWeightSemibold, Ink()); Put(self.calendarDocument, monthTitle, 4, sectionY + 6, calendarWidth - 8, 28);
-            OverviewGrid *grid = [OverviewGrid new]; grid.fill = Card(); grid.stroke = Line(); grid.radius = 14; grid.month = month; grid.selection = self.selectedDay; grid.tasksByDay = tasksByDay;
+            OverviewGrid *grid = [OverviewGrid new]; grid.fill = Card(); grid.gradientEnd = Canvas(); grid.stroke = Line(); grid.radius = 14; grid.month = month; grid.selection = self.selectedDay; grid.tasksByDay = tasksByDay;
             grid.onSelect = ^(NSDate *date, NSString *taskID) {
                 weakSelf.selectedDay = date; weakSelf.month = date; weakSelf.focusedTaskID = taskID; weakSelf.notice = @"";
                 [weakSelf.agendaScroll.contentView scrollToPoint:NSZeroPoint]; [weakSelf render];
@@ -988,7 +998,7 @@ static NSColor *EventFill(NSDictionary *task) {
     Clear(self.document); CGFloat w = self.scroll.contentSize.width - 8, y = 0;
     NSArray *tasks = [self visibleTasks];
     if (self.calendarMode) {
-        MonthView *calendar = [MonthView new]; calendar.fill = Card(); calendar.stroke = Line(); calendar.radius = 14; calendar.month = self.month; calendar.selection = self.selectedDay; calendar.tasks = tasks;
+        MonthView *calendar = [MonthView new]; calendar.fill = Card(); calendar.gradientEnd = Canvas(); calendar.stroke = Line(); calendar.radius = 14; calendar.month = self.month; calendar.selection = self.selectedDay; calendar.tasks = tasks;
         CGFloat calendarHeight = MAX(392, MIN(480, self.scroll.contentSize.height - 8));
         Put(self.document, calendar, 4, 0, w, calendarHeight); [calendar reload];
         __weak typeof(self) weakSelf = self;
@@ -1004,7 +1014,7 @@ static NSColor *EventFill(NSDictionary *task) {
         Put(self.document, Text(heading, 12, NSFontWeightSemibold, Muted()), 5, 0, w - 12, 22); y = 33;
     }
     if (tasks.count == 0) {
-        Surface *empty = Box(Card(), 14); empty.stroke = Line(); Put(self.document, empty, 4, y, w, 202);
+        Surface *empty = GradientBox(Card(), Canvas(), 14); empty.stroke = Line(); Put(self.document, empty, 4, y, w, 202);
         NSTextField *icon = Text(self.query.length ? @"⌕" : @"✓", 32, NSFontWeightLight, Accent()); icon.alignment = NSTextAlignmentCenter; Put(empty, icon, 0, 31, w, 42);
         NSString *emptyTitle = self.query.length ? @"没有找到匹配的任务" : (self.calendarMode ? @"这一天还没有安排" : (self.filter == 5 ? @"最近删除是空的" : @"这里暂时没有任务"));
         NSString *emptyHint = self.query.length ? @"试试学科、任务名称，或清空搜索。" : (self.filter == 5 ? @"删除已完成的任务后会暂时放在这里，可随时恢复。" : @"点右上角「新建 DDL」，开始一份轻松的计划。");
