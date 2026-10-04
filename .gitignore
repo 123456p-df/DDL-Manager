@@ -2,3 +2,20 @@
 build/
 *.dSYM/
 module-cache/
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*.log
+*.local.plist
+credentials*
+secrets*
+.DDL-Manager*
+SS-Homework-Manager-*.zip
+
+# Local planning document and current release packages
+DEVELOPMENT_PLAN.md
+DDL-Manager-*-macOS-arm64*.zip
