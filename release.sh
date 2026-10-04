@@ -36,7 +36,7 @@ cp -R "$app" "$stage/DDL-Manager.app"
 cp docs/ATTRIBUTION.md docs/GITHUB_APP_SETUP.md docs/SECURITY.md docs/VERIFICATION.md "$stage/"
 python3 - <<'PY'
 from pathlib import Path
-Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 1.0 · macOS 13+ · Apple 芯片
+Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.0 · macOS 13+ · Apple 芯片
 
 此包使用临时签名，未经 Apple 公证。更新前退出旧测试版，解压后将 DDL-Manager.app 拖入“应用程序”。首次打开若被阻止，在系统设置 → 隐私与安全性中按系统提示选择“仍要打开”。
 
@@ -51,7 +51,7 @@ GitHub 课程窗口可安装 App、设备码登录、关联个人 fork 和本地
 PY
 suffix=''
 [[ "$mode" == "--candidate" ]] && suffix='-candidate'
-archive="build/releases/DDL-Manager-1.0-macOS-arm64${suffix}.zip"
+archive="build/releases/DDL-Manager-6.0-macOS-arm64${suffix}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc "$stage" "$archive"
 python3 Tools/security-audit.py --artifacts "$archive" --ocr build/tests/privacy-ocr --report build/release-audit.json
 /usr/bin/shasum -a 256 "$archive" > "${archive}.sha256"
