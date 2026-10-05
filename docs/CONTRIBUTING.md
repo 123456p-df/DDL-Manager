@@ -40,9 +40,9 @@ python3 Tools/security-audit.py --history --artifacts build/DDL-Manager.app --oc
 zsh release.sh --candidate
 ```
 
-脚本依次构建、测试、校验签名、扫描历史与产物，然后生成 `build/releases/DDL-Manager-1.0-macOS-arm64-candidate.zip` 和校验文件。ZIP 包含应用、安装说明和公开文档；不包含任务数据库、登录信息或开发计划。
+脚本依次构建、测试、校验签名、扫描历史与产物，然后生成 `build/releases/DDL-Manager-6.0-macOS-arm64-candidate.zip` 和校验文件。ZIP 包含应用、安装说明和公开文档；不包含任务数据库、登录信息或开发计划。
 
-`zsh release.sh` 生成不带 candidate 后缀的本机包，要求配置公开 GitHub App 信息。它仍不会上传 GitHub Release，也不完成 Developer ID 签名或 Apple 公证。当前 `1.0` 是本分支测试包版本号，上游维护者可按原项目版本序列调整。
+`zsh release.sh` 生成不带 candidate 后缀的本机包，要求配置公开 GitHub App 信息。它仍不会上传 GitHub Release，也不完成 Developer ID 签名或 Apple 公证。当前 `6.0` 是本分支测试包版本号，上游维护者可按原项目版本序列调整。
 
 ## 提交给上游
 
