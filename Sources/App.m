@@ -36,6 +36,16 @@ static NSColor *Line(void) { return RGB(Palettes[CurrentTheme].line); }
 static NSColor *Tint(void) { return RGB(Palettes[CurrentTheme].tint); }
 static NSColor *Panel(void) { return RGB(Palettes[CurrentTheme].panel); }
 static NSColor *Emphasis(void) { return RGB(Palettes[CurrentTheme].emphasis); }
+// Shared colors keep the course window in sync with the selected application theme.
+NSColor *DDLCourseColor(NSString *role) {
+    if ([role isEqual:@"canvas"]) return Canvas();
+    if ([role isEqual:@"panel"]) return Panel();
+    if ([role isEqual:@"line"]) return Line();
+    if ([role isEqual:@"accent"]) return Accent();
+    if ([role isEqual:@"muted"]) return Muted();
+    if ([role isEqual:@"tint"]) return Tint();
+    return Ink();
+}
 static NSImage *ThemeIcon(void) {
     unsigned accent = Palettes[CurrentTheme].accent;
     return [NSImage imageWithSize:NSMakeSize(512, 512) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
@@ -798,6 +808,7 @@ static void ConfigureCalendarCell(CalendarDayCell *cell, BOOL selected) {
     if (!self.preview) [NSUserDefaults.standardUserDefaults setObject:ThemeIDs()[CurrentTheme] forKey:ThemePreferenceKey];
     NSApp.applicationIconImage = ThemeIcon();
     self.window.backgroundColor = Canvas();
+    [self.courseWindow refreshTheme];
     for (Surface *surface in @[self.root, self.header, self.document]) { surface.fill = Canvas(); surface.gradientEnd = Panel(); surface.needsDisplay = YES; }
     self.calendarDocument.fill = Panel(); self.calendarDocument.gradientEnd = Canvas(); self.calendarDocument.needsDisplay = YES;
     self.sidebar.fill = Panel(); self.sidebar.gradientEnd = Canvas(); self.sidebar.needsDisplay = YES;

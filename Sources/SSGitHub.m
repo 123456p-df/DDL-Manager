@@ -6,6 +6,8 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
 
 @interface SSGitHub () <NSURLSessionTaskDelegate>
 @property (atomic) BOOL loginCancelled;
+@property (copy) NSDictionary *sessionCredentials;
+@property BOOL credentialsLoaded;
 @end
 
 @implementation SSGitHub
@@ -62,6 +64,28 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
 }
 - (NSDictionary *)loadCredentials { return SSReadSecret(@"github"); }
 - (BOOL)storeCredentials:(NSDictionary *)credentials { return SSWriteSecret(@"github", credentials); }
+- (void)deleteCredentials { SSDeleteSecret(@"github"); }
+- (NSDictionary *)credentialsForSession {
+    @synchronized (self) {
+        // Remember refusal as well as success, so one operation cannot prompt repeatedly.
+        if (!self.credentialsLoaded) {
+            self.credentialsLoaded = YES;
+            self.sessionCredentials = [self loadCredentials];
+        }
+        return self.sessionCredentials;
+    }
+}
+- (BOOL)persistCredentialsForSession:(NSDictionary *)credentials {
+    @synchronized (self) {
+        if (self.loginCancelled) return NO;
+        if (![self storeCredentials:credentials]) {
+            self.sessionCredentials = nil; self.credentialsLoaded = YES;
+            return NO;
+        }
+        self.sessionCredentials = credentials; self.credentialsLoaded = YES;
+        return YES;
+    }
+}
 - (BOOL)waitForPollingInterval:(NSTimeInterval)interval {
     for (NSInteger second = 0; second < ceil(interval); second++) { if (self.loginCancelled) return NO; [NSThread sleepForTimeInterval:1]; }
     return !self.loginCancelled;
@@ -94,7 +118,7 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
         if ([result[@"refresh_token"] isKindOfClass:NSString.class]) stored[@"refresh_token"] = result[@"refresh_token"];
         if (result[@"expires_in"]) stored[@"expires_at"] = [NSDate dateWithTimeIntervalSinceNow:[result[@"expires_in"] doubleValue] - 60];
         if (self.loginCancelled) return NO;
-        if (![self storeCredentials:stored]) { if (error) *error = GHError(@"无法把登录信息保存到 macOS 钥匙串"); return NO; }
+        if (![self persistCredentialsForSession:stored]) { if (error) *error = GHError(@"无法把登录信息保存到 macOS 钥匙串"); return NO; }
         return YES;
     }
     if (error) *error = GHError(@"设备授权已过期，请重新登录");
@@ -102,7 +126,7 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
 }
 
 - (NSString *)accessToken:(NSError **)error {
-    NSDictionary *stored = [self loadCredentials];
+    NSDictionary *stored = [self credentialsForSession];
     NSString *token = stored[@"access_token"];
     if (!token.length) { if (error) *error = GHError(@"请先登录 GitHub"); return nil; }
     if (![stored[@"client_id"] isEqual:self.clientID]) { if (error) *error = GHError(@"应用身份已变化，请重新登录 GitHub"); return nil; }
@@ -113,7 +137,7 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
     id result = [self requestURL:[NSURL URLWithString:@"https://github.com/login/oauth/access_token"] form:@{@"client_id":stored[@"client_id"] ?: self.clientID, @"grant_type":@"refresh_token", @"refresh_token":refresh} token:nil error:error];
     if (![result[@"access_token"] isKindOfClass:NSString.class]) { if (error && !*error) *error = GHError(@"刷新登录失败，请重新登录"); return nil; }
     NSDictionary *next = @{@"access_token":result[@"access_token"], @"refresh_token":result[@"refresh_token"] ?: refresh, @"client_id":self.clientID, @"expires_at":[NSDate dateWithTimeIntervalSinceNow:[result[@"expires_in"] doubleValue] - 60]};
-    if (![self storeCredentials:next]) { if (error) *error = GHError(@"无法更新钥匙串令牌"); return nil; }
+    if (![self persistCredentialsForSession:next]) { if (error) *error = GHError(@"无法更新钥匙串令牌"); return nil; }
     return next[@"access_token"];
 }
 
@@ -160,5 +184,11 @@ static NSError *GHError(NSString *message) { return [NSError errorWithDomain:@"S
     return user;
 }
 - (void)cancelDeviceLogin { self.loginCancelled = YES; }
-- (void)signOut { self.loginCancelled = YES; SSDeleteSecret(@"github"); }
+- (void)signOut {
+    @synchronized (self) {
+        self.loginCancelled = YES;
+        self.sessionCredentials = nil; self.credentialsLoaded = YES;
+        [self deleteCredentials];
+    }
+}
 @end

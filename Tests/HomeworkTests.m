@@ -75,11 +75,15 @@ static void Cleanup(NSDictionary *fixture) { [NSFileManager.defaultManager remov
 @property NSMutableArray *forms;
 @property NSMutableArray *intervals;
 @property NSUInteger tokenStep;
+@property NSUInteger credentialReads;
+@property NSUInteger credentialWrites;
+@property BOOL rejectCredentialWrite;
 @end
 @implementation FixtureAPI
 - (instancetype)init { if ((self = [super init])) { self.clientID = @"Iv1publicClient"; self.forms = NSMutableArray.array; self.intervals = NSMutableArray.array; } return self; }
-- (NSDictionary *)loadCredentials { return self.credentials; }
-- (BOOL)storeCredentials:(NSDictionary *)value { self.credentials = value; return YES; }
+- (NSDictionary *)loadCredentials { self.credentialReads++; return self.credentials; }
+- (BOOL)storeCredentials:(NSDictionary *)value { self.credentialWrites++; if (self.rejectCredentialWrite) return NO; self.credentials = value; return YES; }
+- (void)deleteCredentials { self.credentials = nil; }
 - (BOOL)waitForPollingInterval:(NSTimeInterval)interval { [self.intervals addObject:@(interval)]; return !self.loginCancelled; }
 - (id)requestURL:(NSURL *)url form:(NSDictionary *)form token:(NSString *)token error:(NSError **)error {
     if (form) { [self.forms addObject:form]; Check(!form[@"client_secret"], @"device flow and refresh never include client secret"); }
@@ -158,6 +162,7 @@ static void APITests(void) {
     Check([api completeDeviceLogin:challenge error:&error], @"device polling completes");
     Check(api.intervals.count == 3 && [api.intervals[2] integerValue] >= 10, @"slow_down polling interval respected");
     Check([api.credentials[@"refresh_token"] isEqual:@"test-refresh"], @"refresh token persisted via secret store");
+    api = FixtureAPI.new;
     api.credentials = @{@"access_token":@"expired", @"refresh_token":@"refresh", @"client_id":api.clientID, @"expires_at":[NSDate dateWithTimeIntervalSinceNow:-60]};
     Check([[api accessToken:&error] isEqual:@"new-access"], @"expired access token refreshed");
     api.responses = @{@"/user":@{@"login":@"student", @"id":@42}, @"/repos/student/course":@{@"fork":@YES, @"id":@12, @"full_name":@"student/course", @"owner":@{@"id":@42}, @"parent":@{@"id":@11, @"full_name":@"teacher/course"}}};
@@ -168,6 +173,60 @@ static void APITests(void) {
     wrong = course.mutableCopy; wrong[@"upstreamID"] = @999;
     Check([api verifyCourse:wrong error:&error] == nil, @"wrong parent rejected");
     [api beginDeviceLogin:&error]; [api cancelDeviceLogin]; Check(![api completeDeviceLogin:challenge error:&error], @"device login cancellable");
+}
+static void CredentialSessionTests(void) {
+    NSError *error = nil; FixtureAPI *api = FixtureAPI.new;
+    api.credentials = @{@"access_token":@"synthetic-access", @"client_id":api.clientID};
+    for (NSUInteger i = 0; i < 6; i++) Check([[api accessToken:&error] isEqual:@"synthetic-access"], @"repeated API calls reuse session credentials");
+    Check(api.credentialReads == 1, @"session reads keychain only once");
+    api = FixtureAPI.new;
+    Check(![api accessToken:&error] && ![api accessToken:&error] && api.credentialReads == 1, @"missing or refused credentials do not trigger repeated reads");
+    NSDictionary *challenge = [api beginDeviceLogin:&error];
+    Check([api completeDeviceLogin:challenge error:&error], @"explicit login recovers after a refused read");
+    Check([[api accessToken:&error] isEqual:@"test-access"] && api.credentialReads == 1, @"new login is immediately cached");
+    [api signOut];
+    Check(![api accessToken:&error] && api.credentials == nil && api.credentialReads == 1, @"signout clears saved and in-memory credentials");
+    api = FixtureAPI.new;
+    api.credentials = @{@"access_token":@"expired", @"refresh_token":@"refresh", @"client_id":api.clientID, @"expires_at":[NSDate dateWithTimeIntervalSinceNow:-60]};
+    Check([[api accessToken:&error] isEqual:@"new-access"] && [[api accessToken:&error] isEqual:@"new-access"], @"refreshed credential replaces cached token");
+    Check(api.credentialReads == 1 && api.credentialWrites == 1 && api.forms.count == 1, @"refresh reads and writes keychain once");
+    api = FixtureAPI.new; api.rejectCredentialWrite = YES;
+    api.credentials = @{@"access_token":@"expired", @"refresh_token":@"refresh", @"client_id":api.clientID, @"expires_at":[NSDate dateWithTimeIntervalSinceNow:-60]};
+    Check(![api accessToken:&error] && ![api accessToken:&error] && api.credentialWrites == 1, @"refused refresh save does not cause a repeat prompt loop");
+    api = FixtureAPI.new;
+    api.credentials = @{@"access_token":@"synthetic-access", @"client_id":@"different-app"};
+    Check(![api accessToken:&error], @"cached credentials still enforce application identity");
+}
+static void MetadataTests(void) {
+    NSError *error = nil;
+    NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSString *path = f[@"path"];
+    Write([path stringByAppendingPathComponent:@".DS_Store"], @"local Finder metadata");
+    Write([path stringByAppendingPathComponent:@"._answer.txt"], @"local AppleDouble metadata");
+    Check([service changesForCourse:f error:&error].count == 0, @"system metadata excluded from upload chooser");
+    Check([service syncCourse:f token:@"test" error:&error] != nil, @"untracked metadata does not block update");
+    Check([[NSString stringWithContentsOfFile:[path stringByAppendingPathComponent:@".DS_Store"] encoding:NSUTF8StringEncoding error:NULL] isEqual:@"local Finder metadata"], @"untracked metadata restored locally");
+    Check(![Git(f[@"forkBare"], @[@"ls-tree", @"--name-only", @"main"]) containsString:@".DS_Store"], @"metadata never uploaded by update");
+    Git(path, @[@"add", @".DS_Store"]); Git(path, @[@"commit", @"-m", @"old metadata"]); Git(path, @[@"push", f[@"forkBare"], @"main"]);
+    Write([path stringByAppendingPathComponent:@".DS_Store"], @"changed local metadata"); Git(path, @[@"add", @".DS_Store"]);
+    Check([service syncCourse:f token:@"test" error:&error] != nil, @"tracked staged metadata does not block update");
+    Check([Git(path, @[@"show", @":.DS_Store"]) isEqual:@"changed local metadata"], @"metadata staging restored");
+    Check([Git(f[@"forkBare"], @[@"show", @"main:.DS_Store"]) isEqual:@"local Finder metadata"], @"changed metadata is not pushed");
+    Write([path stringByAppendingPathComponent:@"answer.txt"], @"unfinished assignment");
+    NSString *before = Git(path, @[@"status", @"--porcelain"]);
+    Check(![service syncCourse:f token:@"test" error:&error], @"unfinished assignment still blocks update clearly");
+    Check([Git(path, @[@"status", @"--porcelain"]) isEqual:before], @"blocked update preserves worktree and staging");
+    Git(path, @[@"add", @"answer.txt"]); Git(path, @[@"stash", @"push", @"-m", @"existing student stash", @"--", @"answer.txt"]);
+    NSString *existingStash = Git(path, @[@"rev-parse", @"refs/stash"]);
+    service.denyTeacher = YES;
+    Check(![service syncCourse:f token:@"test" error:&error], @"failed teacher fetch reported with metadata present");
+    Check([Git(path, @[@"rev-parse", @"refs/stash"]) isEqual:existingStash], @"existing student stash preserved after failed update");
+    Check([Git(path, @[@"show", @":.DS_Store"]) isEqual:@"changed local metadata"], @"failed update restores staged metadata");
+    service.denyTeacher = NO;
+    Write([path stringByAppendingPathComponent:@"upload.txt"], @"finished homework");
+    Check([service commitCourse:f paths:@[@"upload.txt"] message:@"homework" login:@"student" userID:@42 token:@"test" error:&error], @"staged metadata does not block assignment upload");
+    Check([Git(path, @[@"show", @":.DS_Store"]) isEqual:@"changed local metadata"], @"upload preserves metadata staging");
+    Check([Git(f[@"forkBare"], @[@"show", @"main:.DS_Store"]) isEqual:@"local Finder metadata"], @"upload does not include staged metadata");
+    Cleanup(f);
 }
 static void GitTests(void) {
     NSError *error = nil;
@@ -262,4 +321,4 @@ static void GitTests(void) {
     Check([Git(path, @[@"rev-parse", @"HEAD"]) isEqual:before], @"divergence preserves local commit"); Cleanup(f);
 
 }
-int main(void) { @autoreleasepool { ParserTests(); SecurityTests(); APITests(); GitTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }
+int main(void) { @autoreleasepool { ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); GitTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }

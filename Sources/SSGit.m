@@ -11,6 +11,13 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
     return parts;
 }
 
+// Finder/AppleDouble metadata is local housekeeping, never an assignment.
+static BOOL SSSystemMetadata(NSString *path) {
+    for (NSString *part in path.pathComponents)
+        if ([part isEqual:@".DS_Store"] || [part isEqual:@".DS_store"] || [part isEqual:@".AppleDouble"] || [part hasPrefix:@"._"]) return YES;
+    return NO;
+}
+
 @interface SSGitResult : NSObject
 @property int status;
 @property NSData *data;
@@ -196,7 +203,7 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
     SSGitResult *status = [self checked:@[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all"] in:path token:nil error:error]; if (!status) return NO;
     if (status.data.length) { if (error) *error = GitError(@"本地有未提交修改；请先提交或自行处理，再拉取上游。"); return NO; } return YES;
 }
-- (NSArray<NSDictionary *> *)changesForCourse:(NSDictionary *)course error:(NSError **)error {
+- (NSArray<NSDictionary *> *)allChangesForCourse:(NSDictionary *)course error:(NSError **)error {
     if (![self validateCourse:course error:error]) return nil;
     SSGitResult *status = [self checked:@[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all"] in:course[@"path"] token:nil error:error]; if (!status) return nil;
     NSArray *entries = [[self string:status] componentsSeparatedByString:@"\0"]; NSMutableArray *changes = NSMutableArray.array;
@@ -207,6 +214,12 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
         [changes addObject:@{@"path":file, @"status":code, @"sensitive":@(SSSensitivePath(file))}];
     }
     return changes;
+}
+- (NSArray<NSDictionary *> *)changesForCourse:(NSDictionary *)course error:(NSError **)error {
+    NSArray *all = [self allChangesForCourse:course error:error]; if (!all) return nil;
+    NSMutableArray *files = NSMutableArray.array;
+    for (NSDictionary *change in all) if (!SSSystemMetadata(change[@"path"])) [files addObject:change];
+    return files;
 }
 - (BOOL)checkObjects:(NSString *)range path:(NSString *)path error:(NSError **)error {
     SSGitResult *objects = [self checked:@[@"rev-list", @"--objects", @"--no-object-names", range] in:path token:nil error:error]; if (!objects) return NO;
@@ -247,6 +260,39 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
     return [self checked:@[@"push", @"--", url, ref] in:path token:token error:error] != nil;
 }
 - (NSDictionary *)syncCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
+    if (![self authorize:course error:error] || ![self validateCourse:course error:error] || ![self submissionBranch:course error:error]) return nil;
+    NSArray *changes = [self allChangesForCourse:course error:error]; if (!changes) return nil;
+    NSMutableArray *metadata = NSMutableArray.array;
+    for (NSDictionary *change in changes) {
+        NSString *code = change[@"status"];
+        // Renames and conflicts need explicit handling, even for a metadata destination.
+        if (!SSSystemMetadata(change[@"path"]) || [code containsString:@"R"] || [code containsString:@"C"] || [code containsString:@"U"] || [code isEqual:@"AA"] || [code isEqual:@"DD"]) {
+            if (error) *error = GitError(@"课程文件有未上传的修改。请先点击“上传作业”选择这些文件；系统杂项文件会自动保留，无需上传。"); return nil;
+        }
+        [metadata addObject:change[@"path"]];
+    }
+    NSString *path = course[@"path"], *backup = nil;
+    if (metadata.count) {
+        NSMutableArray *args = [@[@"stash", @"push", @"--include-untracked", @"-m", @"DDL Manager: local system metadata", @"--"] mutableCopy]; [args addObjectsFromArray:metadata];
+        if (![self checked:args in:path token:nil error:error]) return nil;
+        SSGitResult *ref = [self checked:@[@"rev-parse", @"refs/stash"] in:path token:nil error:error]; if (!ref) return nil;
+        backup = Trim([self string:ref]);
+    }
+    NSDictionary *result = [self syncCleanCourse:course token:token error:error];
+    if (backup) {
+        NSError *restoreError = nil;
+        if (![self checked:@[@"stash", @"apply", @"--index", backup] in:path token:nil error:&restoreError]) {
+            NSString *message = [NSString stringWithFormat:@"系统杂项文件已保存在 Git 暂存备份 %@，未上传。自动恢复未完成，可在处理冲突后用 git stash apply %@ 恢复。", backup, backup];
+            if (error) *error = GitError(message);
+            if (result) { NSMutableDictionary *copy = result.mutableCopy; copy[@"metadataRestoreWarning"] = message; result = copy; }
+        } else {
+            SSGitResult *top = [self run:@[@"rev-parse", @"refs/stash"] in:path token:nil error:NULL];
+            if (top.status == 0 && [Trim([self string:top]) isEqual:backup]) [self checked:@[@"stash", @"drop", @"stash@{0}"] in:path token:nil error:NULL];
+        }
+    }
+    return result;
+}
+- (NSDictionary *)syncCleanCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
     NSDictionary *user = [self authorize:course error:error];
     if (!user || ![self validateCourse:course error:error] || ![self submissionBranch:course error:error] || ![self cleanWorktree:course[@"path"] error:error]) return nil;
     NSString *path = course[@"path"], *url = [NSString stringWithFormat:@"https://github.com/%@.git", course[@"fork"]];
@@ -274,7 +320,9 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
     if (!pendingMerge) { if (error) *error = GitError(@"无法读取合并状态，已停止提交。"); return NO; }
     if (pendingMerge.status == 0) { if (error) *error = GitError(@"有待完成的合并；请先使用冲突引导处理。"); return NO; }
     SSGitResult *staged = [self checked:@[@"diff", @"--cached", @"--name-only", @"-z"] in:path token:nil error:error]; if (!staged) return NO;
-    if (staged.data.length) { if (error) *error = GitError(@"仓库已有暂存内容，请先处理，避免混入本次作业。"); return NO; }
+    for (NSString *file in NonemptyParts([self string:staged], @"\0")) {
+        if (!SSSystemMetadata(file)) { if (error) *error = GitError(@"仓库已有暂存的作业内容，请先处理，避免混入本次上传。"); return NO; }
+    }
     NSArray *changes = [self changesForCourse:course error:error]; if (!changes) return NO;
     NSMutableSet *available = NSMutableSet.set; for (NSDictionary *change in changes) [available addObject:change[@"path"]];
     for (NSString *file in paths) if (![available containsObject:file] || SSSensitivePath(file)) { if (error) *error = GitError(@"所选文件不在变更列表，或包含敏感文件／不能检查的压缩包。"); return NO; }

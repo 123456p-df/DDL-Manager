@@ -19,3 +19,6 @@ SS-Homework-Manager-*.zip
 # Local planning document and current release packages
 DEVELOPMENT_PLAN.md
 DDL-Manager-*-macOS-arm64*.zip
+
+# Versioned installation packages are intentional release deliverables.
+!Releases/DDL-Manager-*-macOS-arm64*.zip
