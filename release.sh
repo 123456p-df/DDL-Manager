@@ -33,26 +33,41 @@ stage='build/releases/package'
 rm -rf "$stage"
 mkdir -p "$stage"
 cp -R "$app" "$stage/DDL-Manager.app"
-cp docs/ATTRIBUTION.md docs/GITHUB_APP_SETUP.md docs/SECURITY.md docs/VERIFICATION.md "$stage/"
+cp docs/ATTRIBUTION.md docs/GITHUB_APP_SETUP.md docs/SECURITY.md docs/VERIFICATION.md docs/CHANGELOG.md "$stage/"
 python3 - <<'PY'
 from pathlib import Path
-Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.0 · macOS 13+ · Apple 芯片
+Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.1 · macOS 13+ · Apple 芯片
 
-此包使用临时签名，未经 Apple 公证。更新前退出旧测试版，解压后将 DDL-Manager.app 拖入“应用程序”。首次打开若被阻止，在系统设置 → 隐私与安全性中按系统提示选择“仍要打开”。
+更新步骤
+1. 先退出旧版（⌘Q）。
+2. 解压安装包，将 DDL-Manager.app 放到“应用程序”文件夹。
+3. 从“应用程序”打开新版。启动后不要移动正在运行的应用。
 
-GitHub 课程窗口可安装 App、设备码登录、关联个人 fork 和本地克隆。当前公开安装入口沿用 SS Homework Manager 的注册名称；它与桌面显示名称不同。未预置公开 Client ID 的包需先按 GITHUB_APP_SETUP.md 完成配置。
+此包使用临时签名，未经 Apple 公证。若首次打开被系统阻止，可在“系统设置 → 隐私与安全性”中按系统提示选择“仍要打开”。
 
-只从老师默认分支扫描作业；识别项须审核。“本周日”等相对日期需确认完整截止时间。所有推送只到已核验属于当前用户的个人 fork。提交前逐项选文件；冲突时使用引导。
+课程与作业
+在“账号与授权”中登录，在“添加课程”中选择自己的课程。
+在“课程设置”中选择“下载课程到新文件夹”或“关联已有课程文件夹”。
+“更新课程文件”获取老师资料；“上传作业”选择文件后自动提交并上传。
+“查找截止日期”读取老师文档；“添加提醒”确认后保存到主界面。
+打开软件不会立即查找，后续自动查找每 6 小时在后台进行。
+系统杂项文件无需上传；文件冲突出现时按页面引导处理。
 
-从旧测试版更新时已有任务和授权继续沿用；从原版 DDL Manager 迁移时先导出任务备份，再在本应用导入。登录令牌只存于本机钥匙串，不在备份或此包中。
+钥匙串授权
+新版首次访问登录信息时，macOS 可能要求输入 Mac 登录密码，可选择“始终允许”。运行中会复用登录信息，减少连续弹窗。不同构建版本的临时签名会变化，因此以后更新仍可能要求首次授权。
 
-提醒需要系统通知权限。关闭窗口后仍在菜单栏运行；退出应用、关机或休眠时无法定时扫描。更多安全限制见 SECURITY.md。
+数据与提醒
+从此前 6.0 测试版更新时，已有任务和课程信息继续沿用。从原版 5.x 迁移时，请先导出任务备份，再在新版导入。
+提醒需要系统通知权限。关闭窗口后软件仍在菜单栏运行；退出、关机或休眠期间不执行定时查找。
+登录信息持久化存于本机钥匙串，不包含在此安装包或任务备份中。
+
+更新内容与验证范围见 CHANGELOG.md 和 VERIFICATION.md。真实 GitHub 网络与钥匙串弹窗仍需实机验证。
 ''')
 PY
 suffix=''
 [[ "$mode" == "--candidate" ]] && suffix='-candidate'
-archive="build/releases/DDL-Manager-6.0-macOS-arm64${suffix}.zip"
+archive="build/releases/DDL-Manager-6.1-macOS-arm64${suffix}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc "$stage" "$archive"
 python3 Tools/security-audit.py --artifacts "$archive" --ocr build/tests/privacy-ocr --report build/release-audit.json
-/usr/bin/shasum -a 256 "$archive" > "${archive}.sha256"
+(cd "${archive:h}" && /usr/bin/shasum -a 256 "${archive:t}") > "${archive}.sha256"
 print -r -- "已生成本机安装包：$archive"
