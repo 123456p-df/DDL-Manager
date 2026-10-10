@@ -228,6 +228,24 @@ static void MetadataTests(void) {
     Check([Git(f[@"forkBare"], @[@"show", @"main:.DS_Store"]) isEqual:@"local Finder metadata"], @"upload does not include staged metadata");
     Cleanup(f);
 }
+static void MetadataRestoreConflictTests(void) {
+    NSError *error = nil; NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSString *path = f[@"path"];
+    NSString *file = [path stringByAppendingPathComponent:@".DS_Store"];
+    Write(file, @"old Finder settings"); Git(path, @[@"add", @".DS_Store"]); Git(path, @[@"commit", @"-m", @"metadata tracked by older version"]);
+    Write(file, @"local Finder settings"); Git(path, @[@"stash", @"push", @"--", @".DS_Store"]);
+    NSString *stash = Git(path, @[@"rev-parse", @"refs/stash"]);
+    Git(path, @[@"rm", @".DS_Store"]); Git(path, @[@"commit", @"-m", @"remove metadata from course"]); Git(path, @[@"push", f[@"forkBare"], @"main"]);
+    SSGitResult *applied = [service run:@[@"stash", @"apply", stash] in:path token:nil error:&error];
+    Check(applied.status != 0 && [Git(path, @[@"diff", @"--name-only", @"--diff-filter=U"]) isEqual:@".DS_Store"], @"reproduce modify/delete metadata conflict after stash restore");
+    NSString *before = Git(path, @[@"rev-parse", @"HEAD"]);
+    Check([service changesForCourse:f error:&error].count == 0, @"metadata restore conflict no longer contradicts empty upload list");
+    Check([Git(path, @[@"diff", @"--name-only", @"--diff-filter=U"]) length] == 0, @"metadata index conflict cleared");
+    Check([[NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:NULL] isEqual:@"local Finder settings"], @"local metadata file content preserved");
+    Check([Git(path, @[@"rev-parse", @"refs/stash"]) isEqual:stash] && [Git(path, @[@"rev-parse", @"HEAD"]) isEqual:before], @"stash and coursework commit remain untouched");
+    Check([service syncCourse:f token:@"test" error:&error] != nil, @"update succeeds after harmless metadata restore conflict");
+    Check(![Git(f[@"forkBare"], @[@"ls-tree", @"--name-only", @"main"]) containsString:@".DS_Store"], @"metadata not uploaded while recovering conflict");
+    Cleanup(f);
+}
 static void GitTests(void) {
     NSError *error = nil;
     NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSString *path = f[@"path"];
@@ -317,8 +335,33 @@ static void GitTests(void) {
     Write([seed stringByAppendingPathComponent:@"remote.txt"], @"remote fork change"); Git(seed, @[@"add", @"remote.txt"]); Git(seed, @[@"commit", @"-m", @"remote fork"]); Git(seed, @[@"push", f[@"forkBare"], @"main"]);
     Write([path stringByAppendingPathComponent:@"local.txt"], @"different local change"); Git(path, @[@"add", @"local.txt"]); Git(path, @[@"commit", @"-m", @"local change"]);
     before = Git(path, @[@"rev-parse", @"HEAD"]);
-    Check(![service syncCourse:f token:@"test" error:&error] && service.pushTargets.count == 0, @"fork branch divergence blocks sync without any push");
-    Check([Git(path, @[@"rev-parse", @"HEAD"]) isEqual:before], @"divergence preserves local commit"); Cleanup(f);
+    Check([service syncCourse:f token:@"test" error:&error][@"success"] != nil, @"fork branch divergence merges automatically");
+    Check([Git(path, @[@"merge-base", @"--is-ancestor", before, @"HEAD"]) isEqual:@""], @"divergence retains local commit in history");
+    Check([Git(f[@"forkBare"], @[@"show", @"main:local.txt"]) isEqual:@"different local change"] && [Git(f[@"forkBare"], @[@"show", @"main:remote.txt"]) isEqual:@"remote fork change"], @"both fork versions uploaded"); Cleanup(f);
 
 }
-int main(void) { @autoreleasepool { ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); GitTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }
+static void DivergentUploadTests(void) {
+    for (NSString *version in @[@"ours", @"theirs"]) {
+        NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSError *error = nil;
+        NSString *path = f[@"path"], *seed = f[@"seed"];
+        NSString *teacherBefore = Git(f[@"teacherBare"], @[@"rev-parse", @"main"]);
+        Write([seed stringByAppendingPathComponent:@"answer.py"], @"remote answer\n"); Git(seed, @[@"add", @"answer.py"]); Git(seed, @[@"commit", @"-m", @"remote answer"]); Git(seed, @[@"push", f[@"forkBare"], @"main"]);
+        Write([path stringByAppendingPathComponent:@"answer.py"], @"local answer\n");
+        Check(![service commitCourse:f paths:@[@"answer.py"] message:@"answer" login:@"student" userID:@42 token:@"test" error:&error], @"conflicting upload pauses for choice");
+        Check([error.userInfo[@"conflicts"] containsObject:@"answer.py"] && [error.userInfo[@"mergeHead"] length] > 0 && [error.localizedDescription hasPrefix:@"同一个文件"], @"upload keeps actionable conflict and cause before saved-commit notice");
+        f[@"pendingMergeTip"] = error.userInfo[@"mergeHead"]; f[@"pendingConflicts"] = error.userInfo[@"conflicts"];
+        Check(service.pushTargets.count == 0, @"no push before resolving conflict");
+        Check(![service chooseConflictVersion:version course:f path:@"README.md" error:&error], @"cannot overwrite a file outside conflict selection");
+        Check([service chooseConflictVersion:version course:f path:@"answer.py" error:&error], @"chosen whole-file version resolves add/add conflict");
+        Check([service continueMergeForCourse:f token:@"test" error:&error], @"resolved upload completes");
+        Check([Git(f[@"forkBare"], @[@"show", @"main:answer.py"]) isEqual:([version isEqual:@"ours"] ? @"local answer" : @"remote answer")], @"uploaded content matches selected version");
+        Check([Git(f[@"teacherBare"], @[@"rev-parse", @"main"]) isEqual:teacherBefore], @"teacher repository never changed"); Cleanup(f);
+    }
+    NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSError *error = nil;
+    NSString *path = f[@"path"], *seed = f[@"seed"];
+    Write([seed stringByAppendingPathComponent:@"remote.txt"], @"remote"); Git(seed, @[@"add", @"remote.txt"]); Git(seed, @[@"commit", @"-m", @"remote"]); Git(seed, @[@"push", f[@"forkBare"], @"main"]);
+    Write([path stringByAppendingPathComponent:@"answer.py"], @"local answer");
+    Check([service commitCourse:f paths:@[@"answer.py"] message:@"answer" login:@"student" userID:@42 token:@"test" error:&error], @"nonconflicting divergent upload merges and pushes in one action");
+    Check([Git(f[@"forkBare"], @[@"show", @"main:remote.txt"]) isEqual:@"remote"] && [Git(f[@"forkBare"], @[@"show", @"main:answer.py"]) isEqual:@"local answer"], @"automatic upload preserves remote and local content"); Cleanup(f);
+}
+int main(void) { @autoreleasepool { ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); MetadataRestoreConflictTests(); GitTests(); DivergentUploadTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }

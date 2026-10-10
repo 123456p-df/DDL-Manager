@@ -36,6 +36,12 @@ static void BackgroundScanTests(void) {
     ScanPreviewWindow *window = ScanPreviewWindow.new;
     window.courses = [@[[ @{@"fork":@"student/one", @"upstream":@"teacher/one", @"path":@"/synthetic/one"} mutableCopy], [@{@"fork":@"student/two", @"upstream":@"teacher/two", @"path":@"/synthetic/two"} mutableCopy]] mutableCopy];
     [window refreshCourses];
+    NSError *cause = [NSError errorWithDomain:@"SSGit" code:2 userInfo:@{NSLocalizedDescriptionKey:@"同一个文件有不同修改，请点击处理文件冲突。", @"mergeHead":@"synthetic-tip", @"conflicts":@[@"answer.py"], @"coursePath":@"/synthetic/one"}];
+    NSMutableDictionary *info = cause.userInfo.mutableCopy; info[NSUnderlyingErrorKey] = cause; info[NSLocalizedDescriptionKey] = @"同一个文件有不同修改，请点击处理文件冲突。\n作业已保存在本地，尚未上传。";
+    [window showError:[NSError errorWithDomain:@"SSGit" code:2 userInfo:info]];
+    Check([window.statusLabel.stringValue hasPrefix:@"同一个文件"] && [window.detail.string containsString:@"尚未上传"], @"visible status leads with cause while details retain saved-work notice");
+    Check(!window.conflictButton.hidden && [window.courses[0][@"pendingMergeTip"] isEqual:@"synthetic-tip"], @"failed upload exposes recoverable conflict action");
+    [window.courses[0] removeObjectForKey:@"pendingMergeTip"]; [window.courses[0] removeObjectForKey:@"pendingConflicts"]; [window refreshCourses];
     SlowCourseGit *git = SlowCourseGit.new; git.releaseScan = dispatch_semaphore_create(0); window.git = git;
     [window startAutomaticChecks]; NSTimer *timer = window.timer;
     [window startAutomaticChecks];

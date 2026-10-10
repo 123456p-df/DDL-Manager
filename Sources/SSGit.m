@@ -215,7 +215,25 @@ static BOOL SSSystemMetadata(NSString *path) {
     }
     return changes;
 }
+- (BOOL)prepareLocalMetadataForCourse:(NSDictionary *)course error:(NSError **)error {
+    if (![self validateCourse:course error:error]) return NO;
+    NSArray *files = [self conflicts:course error:error]; if (!files) return NO;
+    if (!files.count) return YES;
+    for (NSString *file in files) if (!SSSystemMetadata(file)) {
+        if (error) *error = GitError(@"作业文件有未解决的冲突，请先处理冲突再更新或上传。"); return NO;
+    }
+    SSGitResult *merge = [self run:@[@"rev-parse", @"-q", @"--verify", @"MERGE_HEAD"] in:course[@"path"] token:nil error:error];
+    if (!merge) return NO;
+    if (merge.status != 1) {
+        if (error) *error = GitError(@"课程合并尚未完成，请先处理文件冲突。"); return NO;
+    }
+    // A stash restore can leave metadata unmerged without MERGE_HEAD. Reset only
+    // its index entries to HEAD; keep local files and the original stash intact.
+    NSMutableArray *reset = [@[@"reset", @"--quiet", @"HEAD", @"--"] mutableCopy]; [reset addObjectsFromArray:files];
+    return [self checked:reset in:course[@"path"] token:nil error:error] != nil;
+}
 - (NSArray<NSDictionary *> *)changesForCourse:(NSDictionary *)course error:(NSError **)error {
+    if (![self prepareLocalMetadataForCourse:course error:error]) return nil;
     NSArray *all = [self allChangesForCourse:course error:error]; if (!all) return nil;
     NSMutableArray *files = NSMutableArray.array;
     for (NSDictionary *change in all) if (!SSSystemMetadata(change[@"path"])) [files addObject:change];
@@ -252,15 +270,26 @@ static BOOL SSSystemMetadata(NSString *path) {
     SSGitResult *tip = [self checked:@[@"rev-parse", @"HEAD"] in:path token:nil error:error]; if (!tip) return NO;
     NSString *head = Trim([self string:tip]);
     SSGitResult *ancestor = [self run:@[@"merge-base", @"--is-ancestor", base, head] in:path token:nil error:error];
-    if (!ancestor || ancestor.status != 0) { if (error) *error = GitError(@"个人 fork 有新提交或已经分歧；当前推送不是快进，已停止。"); return NO; }
+    if (!ancestor || ancestor.status > 1) { if (error) *error = GitError(ancestor.diagnostic); return NO; }
+    if (ancestor.status == 1) {
+        NSDictionary *user = [self authorize:course error:error]; if (!user) return NO;
+        if (![self checkObjects:[NSString stringWithFormat:@"%@..%@", base, head] path:path error:error]) return NO;
+        NSDictionary *merged = [self withLocalMetadata:course token:token operation:^NSDictionary *(NSError **innerError) {
+            return [self mergeTip:base course:course user:user error:innerError];
+        } error:error];
+        if (!merged || merged[@"conflicts"]) return NO;
+        tip = [self checked:@[@"rev-parse", @"HEAD"] in:path token:nil error:error]; if (!tip) return NO;
+        head = Trim([self string:tip]);
+    }
     if (![self checkObjects:[NSString stringWithFormat:@"%@..%@", base, head] path:path error:error]) return NO;
     if (![self authorize:course error:error] || ![self validateCourse:course error:error] || ![self submissionBranch:course error:error]) return NO;
     NSString *ref = [NSString stringWithFormat:@"%@:refs/heads/%@", head, course[@"branch"]];
     // Immutable commit + a freshly verified, explicit HTTPS fork URL. Never use push.default/pushurl.
     return [self checked:@[@"push", @"--", url, ref] in:path token:token error:error] != nil;
 }
-- (NSDictionary *)syncCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
+- (NSDictionary *)withLocalMetadata:(NSDictionary *)course token:(NSString *)token operation:(NSDictionary *(^)(NSError **))operation error:(NSError **)error {
     if (![self authorize:course error:error] || ![self validateCourse:course error:error] || ![self submissionBranch:course error:error]) return nil;
+    if (![self prepareLocalMetadataForCourse:course error:error]) return nil;
     NSArray *changes = [self allChangesForCourse:course error:error]; if (!changes) return nil;
     NSMutableArray *metadata = NSMutableArray.array;
     for (NSDictionary *change in changes) {
@@ -278,12 +307,12 @@ static BOOL SSSystemMetadata(NSString *path) {
         SSGitResult *ref = [self checked:@[@"rev-parse", @"refs/stash"] in:path token:nil error:error]; if (!ref) return nil;
         backup = Trim([self string:ref]);
     }
-    NSDictionary *result = [self syncCleanCourse:course token:token error:error];
+    NSDictionary *result = operation(error);
     if (backup) {
         NSError *restoreError = nil;
         if (![self checked:@[@"stash", @"apply", @"--index", backup] in:path token:nil error:&restoreError]) {
             NSString *message = [NSString stringWithFormat:@"系统杂项文件已保存在 Git 暂存备份 %@，未上传。自动恢复未完成，可在处理冲突后用 git stash apply %@ 恢复。", backup, backup];
-            if (error) *error = GitError(message);
+            if (error && !*error) *error = GitError(message);
             if (result) { NSMutableDictionary *copy = result.mutableCopy; copy[@"metadataRestoreWarning"] = message; result = copy; }
         } else {
             SSGitResult *top = [self run:@[@"rev-parse", @"refs/stash"] in:path token:nil error:NULL];
@@ -292,22 +321,31 @@ static BOOL SSSystemMetadata(NSString *path) {
     }
     return result;
 }
+- (NSDictionary *)syncCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
+    return [self withLocalMetadata:course token:token operation:^NSDictionary *(NSError **innerError) { return [self syncCleanCourse:course token:token error:innerError]; } error:error];
+}
+- (NSDictionary *)mergeTip:(NSString *)tip course:(NSDictionary *)course user:(NSDictionary *)user error:(NSError **)error {
+    SSGitResult *merge = [self run:[[self authorArguments:user] arrayByAddingObjectsFromArray:@[@"merge", @"--no-edit", tip]] in:course[@"path"] token:nil error:error];
+    if (!merge) return nil;
+    if (merge.status == 0) return @{@"success":@YES};
+    NSArray *files = [self conflicts:course error:NULL];
+    if (!files.count) { if (error) *error = GitError(merge.diagnostic); return nil; }
+    NSDictionary *info = @{@"conflicts":files, @"mergeHead":tip, @"coursePath":course[@"path"], NSLocalizedDescriptionKey:@"同一个文件有不同修改，请点击“处理文件冲突”。"};
+    if (error) *error = [NSError errorWithDomain:@"SSGit" code:2 userInfo:info];
+    return info;
+}
 - (NSDictionary *)syncCleanCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
     NSDictionary *user = [self authorize:course error:error];
     if (!user || ![self validateCourse:course error:error] || ![self submissionBranch:course error:error] || ![self cleanWorktree:course[@"path"] error:error]) return nil;
     NSString *path = course[@"path"], *url = [NSString stringWithFormat:@"https://github.com/%@.git", course[@"fork"]];
     NSString *base = [self fetch:url branch:course[@"branch"] path:path token:token error:error]; if (!base) return nil;
-    if (![self checked:[[self authorArguments:user] arrayByAddingObjectsFromArray:@[@"merge", @"--ff-only", base]] in:path token:nil error:error]) return nil;
+    NSDictionary *forkMerge = [self mergeTip:base course:course user:user error:error];
+    if (!forkMerge || forkMerge[@"conflicts"]) return forkMerge;
     SSGitResult *remote = [self checked:@[@"remote", @"get-url", @"upstream"] in:path token:nil error:error]; if (!remote) return nil;
     NSString *teacherBranch = [self teacherBranch:Trim([self string:remote]) path:path error:error]; if (!teacherBranch) return nil;
     NSString *teacher = [self fetch:Trim([self string:remote]) branch:teacherBranch path:path token:nil error:error]; if (!teacher) return nil;
-    SSGitResult *merge = [self run:[[self authorArguments:user] arrayByAddingObjectsFromArray:@[@"merge", @"--no-edit", teacher]] in:path token:nil error:error]; if (!merge) return nil;
-    if (merge.status != 0) {
-        NSArray *files = [self conflicts:course error:NULL];
-        if (!files.count) { if (error) *error = GitError(merge.diagnostic); return nil; }
-        if (error) *error = GitError(@"合并产生冲突。请打开冲突引导，编辑文件、标记解决后再继续。");
-        return @{@"conflicts":files, @"mergeHead":teacher};
-    }
+    NSDictionary *teacherMerge = [self mergeTip:teacher course:course user:user error:error];
+    if (!teacherMerge || teacherMerge[@"conflicts"]) return teacherMerge;
     if (![self pushCourse:course token:token error:error]) return nil;
     return @{@"success":@YES};
 }
@@ -356,7 +394,14 @@ static BOOL SSSystemMetadata(NSString *path) {
     NSMutableArray *reset = [@[@"reset", @"--quiet", @"HEAD", @"--"] mutableCopy]; [reset addObjectsFromArray:paths];
     if (![self checked:reset in:path token:nil error:error]) return NO;
     if (![self pushCourse:course token:token error:error]) {
-        if (error) *error = GitError([@"已保留本地提交，但尚未推送。修复原因后可点“推送我的 fork”：\n" stringByAppendingString:(*error).localizedDescription ?: @"网络或权限错误"]); return NO;
+        if (error) {
+            NSError *cause = *error;
+            NSMutableDictionary *info = cause.userInfo.mutableCopy ?: NSMutableDictionary.dictionary;
+            info[NSLocalizedDescriptionKey] = [NSString stringWithFormat:@"%@\n作业已保存在本地，尚未上传。", cause.localizedDescription ?: @"上传失败，请重试。"];
+            if (cause) info[NSUnderlyingErrorKey] = cause;
+            *error = [NSError errorWithDomain:@"SSGit" code:cause.code userInfo:info];
+        }
+        return NO;
     }
     return YES;
 }
@@ -379,6 +424,18 @@ static BOOL SSSystemMetadata(NSString *path) {
     }
     NSMutableArray *args = [@[@"add", @"-A", @"--"] mutableCopy]; [args addObjectsFromArray:paths];
     return paths.count && [self checked:args in:course[@"path"] token:nil error:error] != nil;
+}
+- (BOOL)chooseConflictVersion:(NSString *)version course:(NSDictionary *)course path:(NSString *)path error:(NSError **)error {
+    if (![self validateCourse:course error:error] || ![self ownedMerge:course error:error]) return NO;
+    if (![@[@"ours", @"theirs"] containsObject:version] || ![course[@"pendingConflicts"] containsObject:path] || SSSensitivePath(path) || ![[self conflicts:course error:error] containsObject:path]) {
+        if (error) *error = GitError(@"请选择当前冲突中的文件。"); return NO;
+    }
+    NSString *stage = [version isEqual:@"ours"] ? @"2" : @"3";
+    SSGitResult *blob = [self checked:@[@"show", [NSString stringWithFormat:@":%@:%@", stage, path]] in:course[@"path"] token:nil error:error];
+    if (!blob) return NO;
+    if (SSContainsSecret(blob.data)) { if (error) *error = GitError(@"该版本含疑似凭据，不能上传。"); return NO; }
+    if (![self checked:@[@"checkout", [@"--" stringByAppendingString:version], @"--", path] in:course[@"path"] token:nil error:error]) return NO;
+    return [self stageResolvedFiles:course paths:@[path] error:error];
 }
 - (BOOL)continueMergeForCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error {
     NSDictionary *user = [self authorize:course error:error];
