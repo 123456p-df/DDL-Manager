@@ -33,10 +33,11 @@ stage='build/releases/package'
 rm -rf "$stage"
 mkdir -p "$stage"
 cp -R "$app" "$stage/DDL-Manager.app"
+cp LICENSE "$stage/"
 cp docs/ATTRIBUTION.md docs/GITHUB_APP_SETUP.md docs/SECURITY.md docs/VERIFICATION.md docs/CHANGELOG.md "$stage/"
 python3 - <<'PY'
 from pathlib import Path
-Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.1 · macOS 13+ · Apple 芯片
+Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.2 · macOS 13+ · Apple 芯片
 
 更新步骤
 1. 先退出旧版（⌘Q）。
@@ -66,7 +67,7 @@ Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.1 ·
 PY
 suffix=''
 [[ "$mode" == "--candidate" ]] && suffix='-candidate'
-archive="build/releases/DDL-Manager-6.1-macOS-arm64${suffix}.zip"
+archive="build/releases/DDL-Manager-6.2-macOS-arm64${suffix}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc "$stage" "$archive"
 python3 Tools/security-audit.py --artifacts "$archive" --ocr build/tests/privacy-ocr --report build/release-audit.json
 (cd "${archive:h}" && /usr/bin/shasum -a 256 "${archive:t}") > "${archive}.sha256"

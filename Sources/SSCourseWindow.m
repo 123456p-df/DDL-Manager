@@ -214,7 +214,21 @@ static NSButton *SSButton(NSString *text, id target, SEL action, NSRect frame) {
     [self.table reloadData]; [self candidateSelected:nil]; [self updateActions];
 }
 - (void)status:(NSString *)message { self.statusLabel.stringValue = message ?: @""; self.statusLabel.toolTip = message; [self updateActions]; }
-- (void)showError:(NSError *)error { if (error) { [self status:error.localizedDescription]; self.detail.string = error.localizedDescription; } }
+- (void)showError:(NSError *)error {
+    if (!error) return;
+    NSDictionary *course = [self course];
+    if (error.userInfo[@"mergeHead"] && [error.userInfo[@"coursePath"] isEqual:course[@"path"]]) {
+        NSMutableDictionary *saved = [self savedCourse:course];
+        saved[@"pendingMergeTip"] = error.userInfo[@"mergeHead"]; saved[@"pendingConflicts"] = error.userInfo[@"conflicts"]; [self saveCourses];
+    }
+    NSString *reason = ((NSError *)error.userInfo[NSUnderlyingErrorKey]).localizedDescription ?: error.localizedDescription;
+    NSString *first = [reason componentsSeparatedByString:@"\n"].firstObject;
+    for (NSString *line in [reason componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"fatal:"] || [line hasPrefix:@"error:"]) { first = line; break; }
+    [self status:first.length < 75 ? first : @"操作未完成，请查看下方的具体原因。"];
+    self.statusLabel.toolTip = error.localizedDescription;
+    self.detail.string = [@"操作未完成\n\n" stringByAppendingString:error.localizedDescription];
+    [self.detail scrollRangeToVisible:NSMakeRange(0, 0)];
+}
 - (void)work:(NSString *)message operation:(id (^)(NSError **))operation completion:(void (^)(id, NSError *))completion {
     if (self.busy) { [self status:@"已有操作正在执行，请稍候。"] ; return; }
     self.busy = YES; [self status:message];
@@ -446,40 +460,50 @@ static NSButton *SSButton(NSString *text, id target, SEL action, NSRect frame) {
 - (void)conflictGuide:(NSDictionary *)course {
     [self work:@"正在读取冲突状态…" operation:^id(NSError **error) { return [self.git conflicts:course error:error]; } completion:^(NSArray *files, NSError *error) {
         if (!files) { [self showError:error]; return; }
-        if (![course[@"pendingMergeTip"] length]) { [self status:@"没有本应用记录的上游合并。请自行处理现有 Git 状态。"] ; return; }
+        if (![course[@"pendingMergeTip"] length]) { [self status:@"没有需要处理的课程合并。请自行处理现有 Git 状态。"] ; return; }
         NSAlert *alert = NSAlert.new; alert.messageText = @"处理文件冲突";
-        alert.informativeText = files.count ? @"在编辑器中打开文件，保留需要的内容并删除冲突标记。保存后勾选文件，点击“标记已解决”；全部解决后再点击“保存并上传”。" : @"文件已经处理好，点击下方按钮保存并上传。";
+        alert.informativeText = files.count ? @"为每个文件选择要保留的版本。需要合并部分内容时，先在编辑器中修改并保存，再选择“已手动处理”。" : @"文件已经处理好，点击下方按钮保存并上传。";
         NSView *list = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 550, MAX(30, files.count * 26))];
-        NSMutableArray<NSButton *> *checks = NSMutableArray.array;
+        NSMutableArray<NSPopUpButton *> *choices = NSMutableArray.array;
         for (NSUInteger i = 0; i < files.count; i++) {
-            NSButton *check = [NSButton checkboxWithTitle:files[i] target:nil action:NULL]; check.frame = NSMakeRect(0, NSHeight(list.frame) - (i + 1) * 26, 545, 24); [list addSubview:check]; [checks addObject:check];
+            CGFloat y = NSHeight(list.frame) - (i + 1) * 26;
+            NSTextField *name = SSLabel(files[i], NSMakeRect(0, y, 345, 24), 12); name.toolTip = files[i]; [list addSubview:name];
+            NSPopUpButton *choice = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(350, y, 195, 24) pullsDown:NO];
+            [choice addItemsWithTitles:@[@"暂不处理", @"保留本地版本", @"使用下载的版本", @"已手动处理"]]; [list addSubview:choice]; [choices addObject:choice];
         }
         NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 570, MIN(260, NSHeight(list.frame)))]; scroll.hasVerticalScroller = YES; scroll.documentView = list; alert.accessoryView = scroll;
-        [alert addButtonWithTitle:files.count ? @"标记已解决" : @"保存并上传"]; [alert addButtonWithTitle:@"打开课程文件夹"]; [alert addButtonWithTitle:@"撤销本次合并"]; [alert addButtonWithTitle:@"关闭"];
+        [alert addButtonWithTitle:files.count ? @"应用选择" : @"保存并上传"]; [alert addButtonWithTitle:@"打开课程文件夹"]; [alert addButtonWithTitle:@"撤销本次合并"]; [alert addButtonWithTitle:@"关闭"];
         NSModalResponse answer = [alert runModal];
         if (answer == NSAlertSecondButtonReturn) { [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:course[@"path"]]]; return; }
         if (answer == NSAlertThirdButtonReturn) {
-            NSAlert *confirm = NSAlert.new; confirm.messageText = @"撤销此次上游合并？"; confirm.informativeText = @"本次冲突解决中的编辑可能被撤销。Git 会回到合并前的状态。";
+            NSAlert *confirm = NSAlert.new; confirm.messageText = @"撤销此次合并？"; confirm.informativeText = @"本次冲突解决中的编辑可能被撤销。Git 会回到合并前的状态。";
             [confirm addButtonWithTitle:@"撤销合并"]; [confirm addButtonWithTitle:@"保留"];
             if ([confirm runModal] != NSAlertFirstButtonReturn) return;
             [self work:@"正在撤销此次合并…" operation:^id(NSError **innerError) { return @([self.git abortMerge:course error:innerError]); } completion:^(NSNumber *ok, NSError *innerError) {
                 if (!ok.boolValue) { [self showError:innerError]; return; }
-                NSMutableDictionary *saved = [self savedCourse:course]; [saved removeObjectForKey:@"pendingMergeTip"]; [saved removeObjectForKey:@"pendingConflicts"]; [self saveCourses]; [self status:@"已撤销此次上游合并。"];
+                NSMutableDictionary *saved = [self savedCourse:course]; [saved removeObjectForKey:@"pendingMergeTip"]; [saved removeObjectForKey:@"pendingConflicts"]; [self saveCourses]; [self status:@"已撤销此次合并。"];
             }]; return;
         }
         if (answer != NSAlertFirstButtonReturn) return;
         if (!files.count) { [self finishMerge:course]; return; }
-        NSMutableArray *selected = NSMutableArray.array;
-        for (NSUInteger i = 0; i < checks.count; i++) if (checks[i].state == NSControlStateValueOn) [selected addObject:files[i]];
-        if (!selected.count) { [self status:@"请选择已经编辑并保存的冲突文件。"] ; return; }
-        [self work:@"正在检查并标记冲突文件…" operation:^id(NSError **innerError) { return @([self.git stageResolvedFiles:course paths:selected error:innerError]); } completion:^(NSNumber *ok, NSError *innerError) { if (!ok.boolValue) [self showError:innerError]; else [self conflictGuide:course]; }];
+        NSMutableDictionary *selected = NSMutableDictionary.dictionary;
+        for (NSUInteger i = 0; i < choices.count; i++) if (choices[i].indexOfSelectedItem > 0) selected[files[i]] = @(choices[i].indexOfSelectedItem);
+        if (!selected.count) { [self status:@"请为文件选择要保留的版本。"] ; return; }
+        [self work:@"正在保存选择的文件版本…" operation:^id(NSError **innerError) {
+            for (NSString *file in selected) {
+                NSInteger choice = [selected[file] integerValue];
+                BOOL ok = choice == 3 ? [self.git stageResolvedFiles:course paths:@[file] error:innerError] : [self.git chooseConflictVersion:choice == 1 ? @"ours" : @"theirs" course:course path:file error:innerError];
+                if (!ok) return @NO;
+            }
+            return @YES;
+        } completion:^(NSNumber *ok, NSError *innerError) { if (!ok.boolValue) [self showError:innerError]; else [self conflictGuide:course]; }];
     }];
 }
 - (void)commit:(id)sender {
     NSDictionary *course = [self course]; if (!course) return;
     [self work:@"正在读取本地修改…" operation:^id(NSError **error) { return [self.git changesForCourse:course error:error]; } completion:^(NSArray *changes, NSError *error) {
         if (!changes) { [self showError:error]; return; }
-        if (!changes.count) { [self status:@"没有新的作业文件。之前上传失败的内容，可在“课程设置”中重试上传。"] ; return; }
+        if (!changes.count) { [self status:@"没有需要上传的作业文件。"] ; return; }
         NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 590, 350)];
         NSView *list = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 565, MAX(30, changes.count * 27))];
         NSMutableArray<NSButton *> *checks = NSMutableArray.array;

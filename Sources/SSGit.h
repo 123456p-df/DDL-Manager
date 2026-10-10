@@ -16,6 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)continueMergeForCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error;
 - (BOOL)pushCourse:(NSDictionary *)course token:(NSString *)token error:(NSError **)error;
 - (BOOL)stageResolvedFiles:(NSDictionary *)course paths:(NSArray<NSString *> *)paths error:(NSError **)error;
+- (BOOL)chooseConflictVersion:(NSString *)version course:(NSDictionary *)course path:(NSString *)path error:(NSError **)error;
 - (BOOL)abortMerge:(NSDictionary *)course error:(NSError **)error;
 - (NSArray<NSString *> * _Nullable)conflicts:(NSDictionary *)course error:(NSError **)error;
 @end

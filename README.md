@@ -15,7 +15,7 @@
 
 ## 安装与使用
 
-最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.1-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
+最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.2-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
 
 解压后将 `DDL-Manager.app` 放入“应用程序”。首次打开若被系统阻止，可在“系统设置 → 隐私与安全性”按系统提示选择“仍要打开”。更新前退出正在运行的旧测试版。
 
