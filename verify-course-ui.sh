@@ -5,7 +5,7 @@ cd "$TASK_DIR"
 mkdir -p build/tests build/qa
 export CLANG_MODULE_CACHE_PATH="$TASK_DIR/build/module-cache"
 clang -fobjc-arc -fblocks -Wall -Wextra -Werror -Wno-unused-parameter -O2 -mmacosx-version-min=13.0 \
- -framework Cocoa -framework UserNotifications -framework Vision -framework UniformTypeIdentifiers -framework Security \
+ -framework Cocoa -framework UserNotifications -framework Vision -framework UniformTypeIdentifiers -framework Security -framework CFNetwork \
  Tests/HomeworkUI.m Sources/DDLCore.m Sources/DDLImport.m Sources/SSAssignments.m Sources/SSLocalData.m Sources/SSGitHub.m Sources/SSGit.m Sources/SSSecurity.m -o build/tests/homework-ui
 clang -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=13.0 -framework Foundation -framework Vision Tools/PrivacyOCR.m -o build/tests/privacy-ocr
 ui_result=$(build/tests/homework-ui --preview 2>&1)

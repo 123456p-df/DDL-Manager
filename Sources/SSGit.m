@@ -2,6 +2,7 @@
 #import "SSAssignments.h"
 #import "SSSecurity.h"
 #import <signal.h>
+#import <CFNetwork/CFNetwork.h>
 
 static NSError *GitError(NSString *message) { return [NSError errorWithDomain:@"SSGit" code:1 userInfo:@{NSLocalizedDescriptionKey:SSRedactedText(message ?: @"Git 操作失败")}]; }
 static NSString *Trim(NSString *value) { return [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]; }
@@ -9,6 +10,27 @@ static NSArray *NonemptyParts(NSString *value, NSString *separator) {
     NSMutableArray *parts = NSMutableArray.array;
     for (NSString *part in [value componentsSeparatedByString:separator]) if (part.length) [parts addObject:part];
     return parts;
+}
+
+// Resolve each operation from macOS settings, including proxy bypass rules.
+static NSString *SSGitSystemProxy(NSURL *url, NSDictionary *settings, NSError **error) {
+    NSArray *proxies = CFBridgingRelease(CFNetworkCopyProxiesForURL((__bridge CFURLRef)url, (__bridge CFDictionaryRef)settings));
+    NSDictionary *proxy = proxies.firstObject;
+    NSString *type = proxy[(__bridge NSString *)kCFProxyTypeKey];
+    if (!type || [type isEqual:(__bridge NSString *)kCFProxyTypeNone]) return @"";
+    NSString *scheme = nil;
+    if ([type isEqual:(__bridge NSString *)kCFProxyTypeHTTP] || [type isEqual:(__bridge NSString *)kCFProxyTypeHTTPS]) scheme = @"http";
+    else if ([type isEqual:(__bridge NSString *)kCFProxyTypeSOCKS]) scheme = @"socks5h";
+    else { if (error) *error = GitError(@"当前代理使用自动配置脚本。请在 VPN 中开启系统 HTTP/SOCKS 代理，或开启虚拟网卡模式后重试。"); return nil; }
+    NSString *host = proxy[(__bridge NSString *)kCFProxyHostNameKey];
+    NSNumber *port = proxy[(__bridge NSString *)kCFProxyPortNumberKey];
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:"];
+    if (![host isKindOfClass:NSString.class] || !host.length || [host rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound || ![port isKindOfClass:NSNumber.class] || port.integerValue < 1 || port.integerValue > 65535) {
+        if (error) *error = GitError(@"系统代理地址或端口无效，请检查 VPN 的系统代理设置。"); return nil;
+    }
+    NSURLComponents *components = NSURLComponents.new; components.scheme = scheme; components.host = host; components.port = port;
+    if (!components.URL) { if (error) *error = GitError(@"系统代理地址无效，请检查 VPN 设置。"); return nil; }
+    return components.URL.absoluteString;
 }
 
 // Finder/AppleDouble metadata is local housekeeping, never an assignment.
@@ -29,11 +51,23 @@ static BOOL SSSystemMetadata(NSString *path) {
 @property NSString *temporaryIndex;
 @end
 @implementation SSGit
+- (NSDictionary *)systemProxySettings { return CFBridgingRelease(CFNetworkCopySystemProxySettings()) ?: @{}; }
+- (NSArray *)proxyArguments:(NSArray<NSString *> *)arguments error:(NSError **)error {
+    // Local Git operations do not consult or modify the machine's proxy setup.
+    for (NSString *argument in arguments) {
+        if (![argument hasPrefix:@"https://"] || !SSCanonicalRepository(argument)) continue;
+        NSString *proxy = SSGitSystemProxy([NSURL URLWithString:argument], [self systemProxySettings], error);
+        return proxy ? @[@"-c", [@"http.proxy=" stringByAppendingString:proxy]] : nil;
+    }
+    return @[];
+}
 - (SSGitResult *)run:(NSArray<NSString *> *)arguments in:(NSString *)path token:(NSString *)token error:(NSError **)error {
     NSTask *task = NSTask.new;
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/git"];
     NSMutableArray *args = [@[@"-c", @"core.hooksPath=/dev/null", @"-c", @"protocol.ext.allow=never", @"-c", @"http.followRedirects=false", @"-c", @"core.askPass=/usr/bin/false", @"-c", @"commit.gpgSign=false", @"-c", @"tag.gpgSign=false", @"-c", @"credential.helper="] mutableCopy];
     if (!token.length) [args addObjectsFromArray:@[@"-c", @"credential.helper=osxkeychain"]];
+    NSArray *proxyArgs = [self proxyArguments:arguments error:error]; if (!proxyArgs) return nil;
+    [args addObjectsFromArray:proxyArgs];
     [args addObjectsFromArray:arguments]; task.arguments = args;
     if (path.length) task.currentDirectoryURL = [NSURL fileURLWithPath:path isDirectory:YES];
     NSMutableDictionary *environment = NSProcessInfo.processInfo.environment.mutableCopy;

@@ -15,7 +15,7 @@
 
 ## 安装与使用
 
-最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.2-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
+最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.2.1-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
 
 解压后将 `DDL-Manager.app` 放入“应用程序”。首次打开若被系统阻止，可在“系统设置 → 隐私与安全性”按系统提示选择“仍要打开”。更新前退出正在运行的旧测试版。
 
@@ -69,3 +69,5 @@ zsh verify-homework.sh
 构建产物为 `build/DDL-Manager.app`。模块说明、完整验证命令、打包流程和上游 PR 注意事项见 [开发与贡献](docs/CONTRIBUTING.md)。
 
 来源与署名见 [原作者与授权记录](docs/ATTRIBUTION.md)；原版用户指南保存在 [原版说明](docs/UPSTREAM_README.md)。
+
+GitHub HTTPS 操作会自动使用 macOS 系统 HTTP/SOCKS 代理。保持 VPN 的系统代理开启即可；支持例外规则。PAC 自动脚本和 SSH 连接需要另行配置或使用 VPN 虚拟网卡模式。
