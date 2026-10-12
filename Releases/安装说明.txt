@@ -1,6 +1,6 @@
-DDL-Manager 6.2 · macOS 13+ · Apple 芯片
+DDL-Manager 6.2.1 · macOS 13+ · Apple 芯片
 
-最新安装包：DDL-Manager-6.2-macOS-arm64.zip
+最新安装包：DDL-Manager-6.2.1-macOS-arm64.zip
 先退出旧版（⌘Q），解压后将 DDL-Manager.app 放到“应用程序”并打开。
 应用启动后不要移动它。旧版 6.0 的任务和课程数据继续沿用；从原版 5.x 迁移时需导入任务备份。
 
@@ -13,3 +13,5 @@ DDL-Manager 6.2 · macOS 13+ · Apple 芯片
 6.2 额外修复了恢复系统显示设置后产生的冲突误报；实际作业文件和原暂存备份会保留。
 
 本地和 GitHub 都有新内容时会自动合并；同一文件有冲突时，可选择保留哪个版本。
+
+6.2.1 自动使用 VPN 设置的 macOS 系统 HTTP/SOCKS 代理进行 GitHub HTTPS 操作，保持系统代理开启即可。

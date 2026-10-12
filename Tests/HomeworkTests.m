@@ -18,6 +18,27 @@ static NSString *Git(NSString *path, NSArray *args) {
     Check(task.terminationStatus == 0, [NSString stringWithFormat:@"fixture %@: %@", args.firstObject, value]);
     return Trim(value);
 }
+static void ProxyTests(void) {
+    NSURL *url = [NSURL URLWithString:@"https://github.com/student/course.git"];
+    NSError *error = nil;
+    NSDictionary *https = @{@"HTTPSEnable":@1, @"HTTPSProxy":@"127.0.0.1", @"HTTPSPort":@7897};
+    Check([SSGitSystemProxy(url, https, &error) isEqual:@"http://127.0.0.1:7897"], @"HTTPS system proxy maps to HTTP CONNECT endpoint");
+    Check([SSGitSystemProxy(url, @{@"SOCKSEnable":@1, @"SOCKSProxy":@"127.0.0.1", @"SOCKSPort":@7898}, &error) isEqual:@"socks5h://127.0.0.1:7898"], @"SOCKS proxy resolves GitHub through proxy DNS");
+    NSMutableDictionary *bypass = https.mutableCopy; bypass[@"ExceptionsList"] = @[@"*.github.com", @"github.com"];
+    Check([SSGitSystemProxy(url, bypass, &error) isEqual:@""], @"system proxy bypass rules honored");
+    Check([SSGitSystemProxy(url, @{}, &error) isEqual:@""], @"no proxy follows direct system setting");
+    NSMutableDictionary *disabled = https.mutableCopy; disabled[@"HTTPSEnable"] = @0;
+    Check([SSGitSystemProxy(url, disabled, &error) isEqual:@""], @"disabled proxy is not reused");
+    NSMutableDictionary *changed = https.mutableCopy; changed[@"HTTPSPort"] = @7899;
+    Check([SSGitSystemProxy(url, changed, &error) isEqual:@"http://127.0.0.1:7899"], @"changed VPN port resolved on next operation");
+    NSMutableDictionary *invalid = https.mutableCopy; invalid[@"HTTPSProxy"] = @"user:password@127.0.0.1";
+    Check(!SSGitSystemProxy(url, invalid, &error) && error != nil, @"proxy address cannot inject credentials or options");
+    NSDictionary *pac = @{@"ProxyAutoConfigEnable":@1, @"ProxyAutoConfigURLString":@"https://example.invalid/proxy.pac"};
+    error = nil; Check(!SSGitSystemProxy(url, pac, &error) && [error.localizedDescription containsString:@"自动配置"], @"PAC limitation is actionable rather than silently bypassed");
+    SSGit *git = SSGit.new;
+    Check([[git proxyArguments:@[@"status", @"--porcelain"] error:&error] count] == 0, @"local Git operations do not receive proxy flags");
+    Check([[git proxyArguments:@[@"fetch", @"file:///fixture/repo"] error:&error] count] == 0, @"local fixture transport never uses proxy");
+}
 static void Write(NSString *path, NSString *value) { Check([value writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL], @"write fixture"); }
 static NSMutableDictionary *Fixture(void) {
     NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"ss-homework-test-" stringByAppendingString:NSUUID.UUID.UUIDString]];
@@ -364,4 +385,14 @@ static void DivergentUploadTests(void) {
     Check([service commitCourse:f paths:@[@"answer.py"] message:@"answer" login:@"student" userID:@42 token:@"test" error:&error], @"nonconflicting divergent upload merges and pushes in one action");
     Check([Git(f[@"forkBare"], @[@"show", @"main:remote.txt"]) isEqual:@"remote"] && [Git(f[@"forkBare"], @[@"show", @"main:answer.py"]) isEqual:@"local answer"], @"automatic upload preserves remote and local content"); Cleanup(f);
 }
-int main(void) { @autoreleasepool { ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); MetadataRestoreConflictTests(); GitTests(); DivergentUploadTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }
+int main(void) { @autoreleasepool {
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--proxy-network"]) {
+        SSGit *git = SSGit.new; NSError *error = nil;
+        NSArray *args = @[@"ls-remote", @"--", @"https://github.com/Kkucer/DDL-Manager.git", @"HEAD"];
+        NSArray *proxy = [git proxyArguments:args error:&error];
+        Check(proxy.count == 2 && ![proxy.lastObject isEqual:@"http.proxy="], @"real macOS proxy discovered");
+        SSGitResult *result = [git run:args in:nil token:nil error:&error];
+        Check(result && result.status == 0 && result.data.length > 0, @"actual Git can read GitHub through system proxy");
+        printf("PASS: real GitHub system-proxy connection\n"); return 0;
+    }
+    ProxyTests(); ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); MetadataRestoreConflictTests(); GitTests(); DivergentUploadTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }

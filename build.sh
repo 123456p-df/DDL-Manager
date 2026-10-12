@@ -23,7 +23,7 @@ clang \
   -framework UserNotifications \
   -framework Vision \
   -framework UniformTypeIdentifiers \
-  -framework Security \
+  -framework Security -framework CFNetwork \
   "$SCRIPT_DIR/Sources/App.m" \
   "$SCRIPT_DIR/Sources/DDLCore.m" \
   "$SCRIPT_DIR/Sources/DDLImport.m" \
