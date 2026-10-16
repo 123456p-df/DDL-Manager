@@ -58,6 +58,12 @@ static NSButton *SSButton(NSString *text, id target, SEL action, NSRect frame) {
 @property NSButton *reviewButton;
 @property NSButton *conflictButton;
 @property NSTextField *emptyLabel;
+@property NSPopUpButton *ignoreScopePicker;
+@property NSTextField *ignoreTypesField;
+@property NSButton *ignoreHiddenCheckbox;
+@property NSButton *ignoreResetButton;
+@property NSTextField *ignoreScopeLabel;
+@property NSString *ignoreEditingPath;
 @end
 
 @implementation SSCourseWindow
@@ -69,6 +75,7 @@ static NSButton *SSButton(NSString *text, id target, SEL action, NSRect frame) {
         window.title = @"DDL-Manager · GitHub 课程";
         window.minSize = NSMakeSize(1040, 700); window.releasedWhenClosed = NO;
         self.github = [SSGitHub new]; self.git = [SSGit new];
+        [self restoreIgnorePreferences:[self readIgnorePreferences]];
         NSArray *saved = SSReadPlist(@"courses.plist");
         self.courses = NSMutableArray.array;
         for (id item in [saved isKindOfClass:NSArray.class] ? saved : @[]) if ([item isKindOfClass:NSDictionary.class] && [item[@"fork"] isKindOfClass:NSString.class]) [self.courses addObject:[item mutableCopy]];
@@ -184,7 +191,90 @@ static NSButton *SSButton(NSString *text, id target, SEL action, NSRect frame) {
     [self showMenu:sender items:@[@[@"登录 GitHub…", @"login:"], @[@"授权课程仓库…", @"installApp:"], @[@"退出登录", @"signOut:"], @[@"开发者配置…", @"setClientID:"]]];
 }
 - (void)courseMenu:(NSButton *)sender {
-    [self showMenu:sender items:@[@[@"关联已有课程文件夹…", @"linkFolder:"], @[@"下载课程到新文件夹…", @"cloneFork:"], @[@"查看详情", @"report:"], @[[[self course][@"enabled"] isEqual:@NO] ? @"开启自动查找截止日期（每 6 小时）" : @"暂停自动查找截止日期", @"toggleCourse:"], @[@"重试上传已提交的内容", @"push:"], @[@"移除课程关联…", @"removeCourse:"]]];
+    [self showMenu:sender items:@[@[@"关联已有课程文件夹…", @"linkFolder:"], @[@"下载课程到新文件夹…", @"cloneFork:"], @[@"忽略文件类型…", @"ignoreFileTypes:"], @[@"查看详情", @"report:"], @[[[self course][@"enabled"] isEqual:@NO] ? @"开启自动查找截止日期（每 6 小时）" : @"暂停自动查找截止日期", @"toggleCourse:"], @[@"重试上传已提交的内容", @"push:"], @[@"移除课程关联…", @"removeCourse:"]]];
+}
+- (NSDictionary *)readIgnorePreferences { return SSReadPlist(@"upload-ignore.plist"); }
+- (BOOL)writeIgnorePreferences:(NSDictionary *)preferences error:(NSError **)error { return SSWritePlist(@"upload-ignore.plist", preferences, error); }
+- (void)restoreIgnorePreferences:(NSDictionary *)preferences {
+    id types = [preferences isKindOfClass:NSDictionary.class] ? preferences[@"fileTypes"] : nil;
+    NSMutableArray *valid = NSMutableArray.array;
+    if ([types isKindOfClass:NSArray.class]) for (id type in types) if ([type isKindOfClass:NSString.class]) [valid addObject:type];
+    self.git.ignoredFileTypes = [SSGit fileTypesFromText:[valid componentsJoinedByString:@","] error:NULL] ?: @[];
+    id hidden = [preferences isKindOfClass:NSDictionary.class] ? preferences[@"hiddenFiles"] : nil;
+    self.git.ignoreHiddenFiles = [hidden isKindOfClass:NSNumber.class] ? [hidden boolValue] : YES;
+    NSMutableDictionary *folders = NSMutableDictionary.dictionary;
+    id savedFolders = [preferences isKindOfClass:NSDictionary.class] ? preferences[@"folders"] : nil;
+    if ([savedFolders isKindOfClass:NSDictionary.class]) for (id path in savedFolders) {
+        if (![path isKindOfClass:NSString.class] || ![path isAbsolutePath]) continue;
+        NSDictionary *rule = savedFolders[path]; if (![rule isKindOfClass:NSDictionary.class]) continue;
+        NSArray *list = rule[@"fileTypes"]; if (![list isKindOfClass:NSArray.class]) continue;
+        BOOL validList = YES; for (id value in list) if (![value isKindOfClass:NSString.class]) validList = NO;
+        if (!validList || ![rule[@"hiddenFiles"] isKindOfClass:NSNumber.class]) continue;
+        NSArray *normalized = [SSGit fileTypesFromText:[list componentsJoinedByString:@","] error:NULL]; if (!normalized) continue;
+        folders[[path stringByStandardizingPath].stringByResolvingSymlinksInPath] = @{@"fileTypes":normalized, @"hiddenFiles":rule[@"hiddenFiles"]};
+    }
+    self.git.folderIgnoreRules = folders;
+}
+- (BOOL)applyIgnoredFileTypes:(NSString *)text hidden:(BOOL)hidden error:(NSError **)error {
+    return [self applyIgnoredFileTypes:text hidden:hidden folder:nil error:error];
+}
+- (BOOL)applyIgnoredFileTypes:(NSString *)text hidden:(BOOL)hidden folder:(NSString *)path error:(NSError **)error {
+    NSArray *types = [SSGit fileTypesFromText:text error:error]; if (!types) return NO;
+    NSMutableDictionary *folders = self.git.folderIgnoreRules.mutableCopy;
+    NSMutableDictionary *preferences = [@{@"fileTypes":self.git.ignoredFileTypes, @"hiddenFiles":@(self.git.ignoreHiddenFiles)} mutableCopy];
+    if (path.length) folders[path.stringByStandardizingPath.stringByResolvingSymlinksInPath] = @{@"fileTypes":types, @"hiddenFiles":@(hidden)};
+    else { preferences[@"fileTypes"] = types; preferences[@"hiddenFiles"] = @(hidden); }
+    preferences[@"folders"] = folders;
+    if (![self writeIgnorePreferences:preferences error:error]) return NO;
+    [self restoreIgnorePreferences:preferences]; return YES;
+}
+- (BOOL)useGlobalIgnoreRulesForFolder:(NSString *)path error:(NSError **)error {
+    NSMutableDictionary *folders = self.git.folderIgnoreRules.mutableCopy;
+    [folders removeObjectForKey:path.stringByStandardizingPath.stringByResolvingSymlinksInPath];
+    NSDictionary *preferences = @{@"fileTypes":self.git.ignoredFileTypes, @"hiddenFiles":@(self.git.ignoreHiddenFiles), @"folders":folders};
+    if (![self writeIgnorePreferences:preferences error:error]) return NO;
+    [self restoreIgnorePreferences:preferences]; return YES;
+}
+- (void)ignoreScopeChanged:(id)sender {
+    BOOL local = self.ignoreScopePicker.indexOfSelectedItem == 1;
+    NSDictionary *rules = [self.git ignoreRulesForPath:local ? self.ignoreEditingPath : nil];
+    NSMutableArray *values = NSMutableArray.array; for (NSString *type in rules[@"fileTypes"]) [values addObject:[@"." stringByAppendingString:type]];
+    self.ignoreTypesField.stringValue = [values componentsJoinedByString:@", "];
+    self.ignoreHiddenCheckbox.state = [rules[@"hiddenFiles"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.ignoreScopeLabel.stringValue = local ? self.ignoreEditingPath : @"应用到所有课程；单独设置过的文件夹保留自己的规则。";
+    self.ignoreScopeLabel.toolTip = self.ignoreScopeLabel.stringValue;
+    self.ignoreResetButton.enabled = local && self.git.folderIgnoreRules[self.ignoreEditingPath.stringByStandardizingPath.stringByResolvingSymlinksInPath] != nil;
+}
+- (void)ignoreFileTypes:(id)sender {
+    self.ignoreEditingPath = [self course][@"path"];
+    NSAlert *alert = NSAlert.new; alert.messageText = @"忽略文件类型";
+    alert.informativeText = @"选择生效范围，再填写后缀。用逗号或空格分隔。";
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 500, 225)];
+    self.ignoreScopePicker = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 191, 500, 28) pullsDown:NO];
+    [self.ignoreScopePicker addItemsWithTitles:@[@"所有课程（全局）", @"当前课程文件夹"]];
+    self.ignoreScopePicker.target = self; self.ignoreScopePicker.action = @selector(ignoreScopeChanged:);
+    [self.ignoreScopePicker itemAtIndex:1].enabled = self.ignoreEditingPath.length > 0; [view addSubview:self.ignoreScopePicker];
+    self.ignoreScopeLabel = SSLabel(@"", NSMakeRect(0, 158, 500, 25), 12); [view addSubview:self.ignoreScopeLabel];
+    self.ignoreTypesField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 111, 500, 28)];
+    self.ignoreTypesField.placeholderString = @"例如：.pdf, .png, .zip"; [view addSubview:self.ignoreTypesField];
+    self.ignoreHiddenCheckbox = [NSButton checkboxWithTitle:@"忽略隐藏文件和文件夹（以 . 开头）" target:nil action:NULL];
+    self.ignoreHiddenCheckbox.frame = NSMakeRect(0, 69, 500, 24); [view addSubview:self.ignoreHiddenCheckbox];
+    NSTextField *hint = [NSTextField wrappingLabelWithString:@"文件夹设置优先于全局设置。只忽略尚未被 Git 跟踪的文件，不删除本地内容。清空后缀可取消按类型忽略。"];
+    hint.frame = NSMakeRect(0, 0, 500, 48); hint.font = [NSFont systemFontOfSize:12]; [view addSubview:hint];
+    alert.accessoryView = view; [alert addButtonWithTitle:@"保存"]; [alert addButtonWithTitle:@"取消"]; [alert addButtonWithTitle:@"此文件夹使用全局设置"];
+    self.ignoreResetButton = alert.buttons[2]; [self ignoreScopeChanged:nil];
+    [alert.window setInitialFirstResponder:self.ignoreTypesField];
+    NSModalResponse answer = [alert runModal]; NSError *error = nil;
+    if (answer == NSAlertFirstButtonReturn) {
+        NSString *folder = self.ignoreScopePicker.indexOfSelectedItem == 1 ? self.ignoreEditingPath : nil;
+        if (![self applyIgnoredFileTypes:self.ignoreTypesField.stringValue hidden:self.ignoreHiddenCheckbox.state == NSControlStateValueOn folder:folder error:&error]) { [self showError:error]; return; }
+        [self status:folder ? @"当前课程文件夹的忽略设置已保存。" : @"全局忽略设置已保存。"];
+    } else if (answer == NSAlertThirdButtonReturn && self.ignoreScopePicker.indexOfSelectedItem == 1) {
+        if (![self useGlobalIgnoreRulesForFolder:self.ignoreEditingPath error:&error]) { [self showError:error]; return; }
+        [self status:@"当前课程文件夹已改用全局忽略设置。"];
+    }
+    self.ignoreScopePicker = nil; self.ignoreTypesField = nil; self.ignoreHiddenCheckbox = nil;
+    self.ignoreResetButton = nil; self.ignoreScopeLabel = nil; self.ignoreEditingPath = nil;
 }
 - (void)show { [self showWindow:nil]; [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; }
 - (void)startAutomaticChecks {

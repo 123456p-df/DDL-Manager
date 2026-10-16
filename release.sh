@@ -37,7 +37,7 @@ cp LICENSE "$stage/"
 cp docs/ATTRIBUTION.md docs/GITHUB_APP_SETUP.md docs/SECURITY.md docs/VERIFICATION.md docs/CHANGELOG.md "$stage/"
 python3 - <<'PY'
 from pathlib import Path
-Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.2.1 · macOS 13+ · Apple 芯片
+Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.3 · macOS 13+ · Apple 芯片
 
 更新步骤
 1. 先退出旧版（⌘Q）。
@@ -53,6 +53,7 @@ Path('build/releases/package/安装说明.txt').write_text('''DDL-Manager 6.2.1 
 “查找截止日期”读取老师文档；“添加提醒”确认后保存到主界面。
 打开软件不会立即查找，后续自动查找每 6 小时在后台进行。
 系统杂项文件无需上传；文件冲突出现时按页面引导处理。
+“课程设置 → 忽略文件类型”可设置全局或当前课程文件夹的规则，默认忽略隐藏文件；只影响未跟踪文件，不删除本地内容。
 GitHub HTTPS 操作自动使用 macOS 系统 HTTP/SOCKS 代理，保持 VPN 的系统代理开启即可。
 
 钥匙串授权
@@ -68,7 +69,7 @@ GitHub HTTPS 操作自动使用 macOS 系统 HTTP/SOCKS 代理，保持 VPN 的�
 PY
 suffix=''
 [[ "$mode" == "--candidate" ]] && suffix='-candidate'
-archive="build/releases/DDL-Manager-6.2.1-macOS-arm64${suffix}.zip"
+archive="build/releases/DDL-Manager-6.3-macOS-arm64${suffix}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc "$stage" "$archive"
 python3 Tools/security-audit.py --artifacts "$archive" --ocr build/tests/privacy-ocr --report build/release-audit.json
 (cd "${archive:h}" && /usr/bin/shasum -a 256 "${archive:t}") > "${archive}.sha256"

@@ -4,6 +4,12 @@ NS_ASSUME_NONNULL_BEGIN
 @interface SSGit : NSObject
 /// Required before cloning, committing, merging or pushing. Rechecks GitHub ownership.
 @property (copy) NSDictionary * _Nullable (^identityVerifier)(NSDictionary *course, NSError **error);
+/// Extra ignore rules affect untracked files only, across all course folders.
+@property (copy) NSArray<NSString *> *ignoredFileTypes;
+@property BOOL ignoreHiddenFiles;
+@property (copy) NSDictionary<NSString *, NSDictionary *> *folderIgnoreRules;
+- (NSDictionary *)ignoreRulesForPath:(NSString * _Nullable)path;
++ (NSArray<NSString *> * _Nullable)fileTypesFromText:(NSString *)text error:(NSError **)error;
 /// Course keys: fork, upstream, branch, upstreamBranch, path, upstreamURL.
 - (BOOL)validateCourse:(NSDictionary *)course error:(NSError **)error;
 - (BOOL)linkCourse:(NSDictionary *)course error:(NSError **)error;

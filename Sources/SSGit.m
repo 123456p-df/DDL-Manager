@@ -51,6 +51,57 @@ static BOOL SSSystemMetadata(NSString *path) {
 @property NSString *temporaryIndex;
 @end
 @implementation SSGit
+- (instancetype)init { if ((self = [super init])) { _ignoredFileTypes = @[]; _folderIgnoreRules = @{}; } return self; }
++ (NSArray<NSString *> *)fileTypesFromText:(NSString *)text error:(NSError **)error {
+    NSMutableOrderedSet *types = NSMutableOrderedSet.orderedSet;
+    NSCharacterSet *separators = [NSCharacterSet characterSetWithCharactersInString:@" ,，;；、\t\n\r"];
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789._+-"];
+    for (NSString *raw in [text componentsSeparatedByCharactersInSet:separators]) {
+        if (!raw.length) continue;
+        NSString *type = raw.lowercaseString;
+        if ([type hasPrefix:@"*."]) type = [type substringFromIndex:2];
+        else if ([type hasPrefix:@"."]) type = [type substringFromIndex:1];
+        if (!type.length || type.length > 40 || [type hasPrefix:@"."] || [type hasSuffix:@"."] || [type containsString:@".."] || [type rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound || types.count >= 100) {
+            if (error) *error = GitError(@"请填写文件后缀，例如 .pdf、.png 或 .tar.gz；不要填写路径。最多添加 100 种类型。"); return nil;
+        }
+        [types addObject:type];
+    }
+    return types.array;
+}
+- (NSDictionary *)ignoreRulesForPath:(NSString *)path {
+    NSString *key = path.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+    NSDictionary *local = key ? self.folderIgnoreRules[key] : nil;
+    return local ?: @{@"fileTypes":self.ignoredFileTypes ?: @[], @"hiddenFiles":@(self.ignoreHiddenFiles)};
+}
+- (SSGitResult *)courseStatus:(NSString *)path error:(NSError **)error {
+    NSArray *args = @[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all"];
+    NSDictionary *options = [self ignoreRulesForPath:path];
+    NSArray *types = [SSGit fileTypesFromText:[options[@"fileTypes"] componentsJoinedByString:@","] error:error];
+    if (!types) return nil;
+    if (!types.count && ![options[@"hiddenFiles"] boolValue]) return [self checked:args in:path token:nil error:error];
+    NSMutableString *rules = NSMutableString.string;
+    if ([options[@"hiddenFiles"] boolValue]) [rules appendString:@".*\n"];
+    for (NSString *type in types) {
+        NSMutableString *pattern = [@"*." mutableCopy];
+        for (NSUInteger i = 0; i < type.length; i++) {
+            unichar c = [type characterAtIndex:i];
+            if (c >= 'a' && c <= 'z') [pattern appendFormat:@"[%c%c]", c, c - 'a' + 'A'];
+            else [pattern appendFormat:@"%C", c];
+        }
+        [rules appendFormat:@"%@\n", pattern];
+    }
+    // Only Git's untracked-file discovery uses these rules. Literal path safety
+    // remains enabled, and existing repository rules and tracked files are kept.
+    NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"ddl-ignore-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    if (![NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:error]) return nil;
+    @try {
+        NSString *file = [directory stringByAppendingPathComponent:@"ignore"];
+        if (![rules writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:error]) return nil;
+        [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:file error:NULL];
+        NSArray *configured = [@[@"-c", [@"core.excludesFile=" stringByAppendingString:file]] arrayByAddingObjectsFromArray:args];
+        return [self checked:configured in:path token:nil error:error];
+    } @finally { [NSFileManager.defaultManager removeItemAtPath:directory error:NULL]; }
+}
 - (NSDictionary *)systemProxySettings { return CFBridgingRelease(CFNetworkCopySystemProxySettings()) ?: @{}; }
 - (NSArray *)proxyArguments:(NSArray<NSString *> *)arguments error:(NSError **)error {
     // Local Git operations do not consult or modify the machine's proxy setup.
@@ -234,12 +285,12 @@ static BOOL SSSystemMetadata(NSString *path) {
     return @{@"candidates":candidates, @"skipped":skipped, @"commit":head, @"branch":branch, @"date":NSDate.date};
 }
 - (BOOL)cleanWorktree:(NSString *)path error:(NSError **)error {
-    SSGitResult *status = [self checked:@[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all"] in:path token:nil error:error]; if (!status) return NO;
+    SSGitResult *status = [self courseStatus:path error:error]; if (!status) return NO;
     if (status.data.length) { if (error) *error = GitError(@"本地有未提交修改；请先提交或自行处理，再拉取上游。"); return NO; } return YES;
 }
 - (NSArray<NSDictionary *> *)allChangesForCourse:(NSDictionary *)course error:(NSError **)error {
     if (![self validateCourse:course error:error]) return nil;
-    SSGitResult *status = [self checked:@[@"status", @"--porcelain=v1", @"-z", @"--untracked-files=all"] in:course[@"path"] token:nil error:error]; if (!status) return nil;
+    SSGitResult *status = [self courseStatus:course[@"path"] error:error]; if (!status) return nil;
     NSArray *entries = [[self string:status] componentsSeparatedByString:@"\0"]; NSMutableArray *changes = NSMutableArray.array;
     for (NSUInteger i = 0; i < entries.count; i++) {
         NSString *entry = entries[i]; if (entry.length < 4) continue;

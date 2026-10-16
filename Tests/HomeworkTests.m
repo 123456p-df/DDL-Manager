@@ -218,6 +218,51 @@ static void CredentialSessionTests(void) {
     api.credentials = @{@"access_token":@"synthetic-access", @"client_id":@"different-app"};
     Check(![api accessToken:&error], @"cached credentials still enforce application identity");
 }
+static void IgnoreTypesTests(void) {
+    NSError *error = nil;
+    Check([[SSGit fileTypesFromText:@".PDF, *.png；tar.gz pdf" error:&error] isEqual:@[@"pdf", @"png", @"tar.gz"]], @"extension input normalizes dots, globs, separators, case and duplicates");
+    Check([SSGit fileTypesFromText:@" " error:&error].count == 0, @"empty extension list removes type rules");
+    for (NSString *bad in @[@"../answer", @"*", @".pdf/secret", @"..png", @"png[ab]", @"png!"])
+        Check(![SSGit fileTypesFromText:bad error:&error], @"paths and arbitrary patterns rejected");
+    NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSString *path = f[@"path"];
+    NSArray *files = @[@".gitignore", @".obsidian/workspace.json", @"lesson/.venv/pyvenv.cfg", @"lesson/._settings", @"lesson/note.PDF", @"lesson/image.png", @"archive.tar.gz", @"lesson/answer.py", @"lesson/not-pdf.txt"];
+    for (NSString *file in files) {
+        NSString *full = [path stringByAppendingPathComponent:file];
+        Check([NSFileManager.defaultManager createDirectoryAtPath:full.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL], @"create nested ignore fixture");
+        Write(full, [file isEqual:@".gitignore"] ? @"*.tmp\n" : @"local content\n");
+    }
+    Write([path stringByAppendingPathComponent:@"already-ignored.tmp"], @"existing gitignore rule");
+    service.ignoredFileTypes = @[@"pdf", @"png", @"tar.gz"]; service.ignoreHiddenFiles = YES;
+    NSArray *changes = [service changesForCourse:f error:&error];
+    NSMutableSet *visible = NSMutableSet.set; for (NSDictionary *change in changes) [visible addObject:change[@"path"]];
+    Check([visible isEqual:[NSSet setWithArray:@[@"lesson/answer.py", @"lesson/not-pdf.txt"]]], @"hidden folders, selected types and existing gitignore rules omitted at every depth");
+    Check(![service commitCourse:f paths:@[@"lesson/note.PDF"] message:@"do not upload ignored file" login:@"student" userID:@42 token:@"test" error:&error], @"ignored file cannot be injected into selection");
+    Check(![service syncCourse:f token:@"test" error:&error], @"visible unfinished assignments still block update");
+    Check([service commitCourse:f paths:@[@"lesson/answer.py", @"lesson/not-pdf.txt"] message:@"answers" login:@"student" userID:@42 token:@"test" error:&error], @"upload selection succeeds beside ignored files");
+    Check([service syncCourse:f token:@"test" error:&error][@"success"] != nil, @"ignored types and hidden files do not block course update");
+    NSString *remote = Git(f[@"forkBare"], @[@"ls-tree", @"-r", @"--name-only", @"main"]);
+    Check(![remote containsString:@"note.PDF"] && ![remote containsString:@".obsidian"] && [remote containsString:@"answer.py"], @"only homework reaches remote fork");
+    for (NSString *file in files) Check([NSFileManager.defaultManager fileExistsAtPath:[path stringByAppendingPathComponent:file]], @"ignored local content preserved");
+    Check([Git(path, @[@"config", @"--local", @"--list"]) rangeOfString:@"excludesfile"].location == NSNotFound, @"ignore options never change repository configuration");
+    service.ignoredFileTypes = @[]; service.ignoreHiddenFiles = NO;
+    changes = [service changesForCourse:f error:&error]; visible = NSMutableSet.set; for (NSDictionary *change in changes) [visible addObject:change[@"path"]];
+    Check([visible containsObject:@"lesson/note.PDF"] && [visible containsObject:@".obsidian/workspace.json"] && ![visible containsObject:@"already-ignored.tmp"], @"clearing options restores files while respecting repo gitignore");
+    Git(path, @[@"add", @"--", @"lesson/note.PDF"]); Git(path, @[@"commit", @"-m", @"tracked PDF"]);
+    Write([path stringByAppendingPathComponent:@"lesson/note.PDF"], @"tracked PDF changed");
+    service.ignoredFileTypes = @[@"pdf"]; service.ignoreHiddenFiles = YES;
+    changes = [service changesForCourse:f error:&error]; visible = NSMutableSet.set; for (NSDictionary *change in changes) [visible addObject:change[@"path"]];
+    Check([visible containsObject:@"lesson/note.PDF"], @"already tracked modifications remain visible");
+    Check(![service syncCourse:f token:@"test" error:&error], @"tracked ignored-type modifications still protected from merge");
+    service.folderIgnoreRules = @{path:@{@"fileTypes":@[@"png"], @"hiddenFiles":@NO}};
+    Check([[[service ignoreRulesForPath:path][@"fileTypes"] firstObject] isEqual:@"png"] && ![[service ignoreRulesForPath:path][@"hiddenFiles"] boolValue], @"folder settings replace global extension and hidden-file rules");
+    Check([[[service ignoreRulesForPath:[path stringByAppendingPathComponent:@"../another-course"]][@"fileTypes"] firstObject] isEqual:@"pdf"], @"folder rule does not leak to another course");
+    changes = [service changesForCourse:f error:&error]; visible = NSMutableSet.set; for (NSDictionary *change in changes) [visible addObject:change[@"path"]];
+    Check(![visible containsObject:@"lesson/image.png"] && [visible containsObject:@".obsidian/workspace.json"], @"real status uses selected folder override");
+    service.ignoredFileTypes = @[@"zip"];
+    Check([[[service ignoreRulesForPath:path][@"fileTypes"] firstObject] isEqual:@"png"], @"global changes preserve folder override");
+    service.folderIgnoreRules = @{};
+    Check([[[service ignoreRulesForPath:path][@"fileTypes"] firstObject] isEqual:@"zip"] && [[service ignoreRulesForPath:path][@"hiddenFiles"] boolValue], @"removing folder override restores current global settings"); Cleanup(f);
+}
 static void MetadataTests(void) {
     NSError *error = nil;
     NSMutableDictionary *f = Fixture(); FixtureGit *service = Service(f); NSString *path = f[@"path"];
@@ -395,4 +440,4 @@ int main(void) { @autoreleasepool {
         Check(result && result.status == 0 && result.data.length > 0, @"actual Git can read GitHub through system proxy");
         printf("PASS: real GitHub system-proxy connection\n"); return 0;
     }
-    ProxyTests(); ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); MetadataTests(); MetadataRestoreConflictTests(); GitTests(); DivergentUploadTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }
+    ProxyTests(); ParserTests(); SecurityTests(); APITests(); CredentialSessionTests(); IgnoreTypesTests(); MetadataTests(); MetadataRestoreConflictTests(); GitTests(); DivergentUploadTests(); printf("PASS: %lu homework/API/Git/security assertions\n", (unsigned long)assertions); } return 0; }
