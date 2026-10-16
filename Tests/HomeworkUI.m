@@ -25,13 +25,52 @@ static void Capture(NSView *view, NSString *path) {
     return @{@"candidates":@[], @"date":NSDate.date, @"branch":@"main"};
 }
 @end
-@interface ScanPreviewWindow : SSCourseWindow @end
+@interface ScanPreviewWindow : SSCourseWindow
+@property NSDictionary *ignorePreferences;
+@property BOOL rejectIgnoreSave;
+@end
 @implementation ScanPreviewWindow
 - (void)saveCourses {}
+- (NSDictionary *)readIgnorePreferences { return nil; }
+- (BOOL)writeIgnorePreferences:(NSDictionary *)preferences error:(NSError **)error {
+    if (self.rejectIgnoreSave) { if (error) *error = [NSError errorWithDomain:@"test" code:1 userInfo:@{NSLocalizedDescriptionKey:@"模拟保存失败"}]; return NO; }
+    self.ignorePreferences = preferences; return YES;
+}
 - (NSMutableDictionary *)readScanCache { return NSMutableDictionary.dictionary; }
 - (void)writeScanCache:(NSDictionary *)cache {}
 - (void)saveScanResults {}
 @end
+static void IgnorePreferencesTests(void) {
+    ScanPreviewWindow *window = ScanPreviewWindow.new; NSError *error = nil;
+    Check(window.git.ignoreHiddenFiles && window.git.ignoredFileTypes.count == 0, @"hidden files ignored by default in course window");
+    Check([window applyIgnoredFileTypes:@".PDF, *.png" hidden:YES error:&error], @"valid ignore settings save");
+    Check([window.git.ignoredFileTypes isEqual:@[@"pdf", @"png"]] && [window.ignorePreferences[@"hiddenFiles"] boolValue], @"saved settings immediately configure Git service");
+    ScanPreviewWindow *restored = ScanPreviewWindow.new; [restored restoreIgnorePreferences:window.ignorePreferences];
+    Check([restored.git.ignoredFileTypes isEqual:window.git.ignoredFileTypes] && restored.git.ignoreHiddenFiles, @"ignore preferences restore across window launches");
+    Check(![window applyIgnoredFileTypes:@"../files" hidden:NO error:&error] && window.git.ignoreHiddenFiles, @"invalid setting leaves existing options unchanged");
+    window.rejectIgnoreSave = YES;
+    Check(![window applyIgnoredFileTypes:@"zip" hidden:NO error:&error] && [window.git.ignoredFileTypes isEqual:@[@"pdf", @"png"]], @"failed persistence leaves active rules unchanged");
+    window.rejectIgnoreSave = NO;
+    Check([window applyIgnoredFileTypes:@"" hidden:NO error:&error] && !window.git.ignoreHiddenFiles && window.git.ignoredFileTypes.count == 0, @"user can clear types and disable hidden-file ignore");
+    NSString *folder = @"/synthetic/one";
+    Check([window applyIgnoredFileTypes:@"zip" hidden:YES folder:folder error:&error], @"folder-specific preferences can be saved");
+    Check([window applyIgnoredFileTypes:@"pdf" hidden:NO error:&error] && [window.git.folderIgnoreRules[folder][@"fileTypes"] isEqual:@[@"zip"]], @"saving global settings preserves folder choice");
+    [restored restoreIgnorePreferences:window.ignorePreferences];
+    Check([restored.git.folderIgnoreRules[folder][@"fileTypes"] isEqual:@[@"zip"]], @"folder override restores across launches");
+    Check([window useGlobalIgnoreRulesForFolder:folder error:&error] && ![[window.git ignoreRulesForPath:folder][@"hiddenFiles"] boolValue], @"folder can return to global settings");
+    window.courses = [@[[ @{@"fork":@"student/one", @"path":folder} mutableCopy]] mutableCopy]; [window refreshCourses];
+    NSTimer *modalTimer = [NSTimer timerWithTimeInterval:0.2 repeats:NO block:^(NSTimer *timer) {
+        Check(NSApp.modalWindow != nil && window.ignoreScopePicker != nil, @"ignore settings dialog opens");
+        [window.ignoreScopePicker selectItemAtIndex:1]; [window ignoreScopeChanged:nil];
+        Check([window.ignoreScopeLabel.stringValue isEqual:folder], @"folder scope displays affected folder");
+        window.ignoreTypesField.stringValue = @".png, .zip"; window.ignoreHiddenCheckbox.state = NSControlStateValueOn;
+        Capture(NSApp.modalWindow.contentView, @"build/qa/ignore-file-types.png");
+        [NSApp stopModalWithCode:NSAlertFirstButtonReturn];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:modalTimer forMode:NSModalPanelRunLoopMode];
+    [window ignoreFileTypes:nil];
+    Check([window.git.folderIgnoreRules[folder][@"fileTypes"] isEqual:@[@"png", @"zip"]] && [window.git.ignoredFileTypes isEqual:@[@"pdf"]], @"dialog saves only selected folder scope");
+}
 static void BackgroundScanTests(void) {
     ScanPreviewWindow *window = ScanPreviewWindow.new;
     window.courses = [@[[ @{@"fork":@"student/one", @"upstream":@"teacher/one", @"path":@"/synthetic/one"} mutableCopy], [@{@"fork":@"student/two", @"upstream":@"teacher/two", @"path":@"/synthetic/two"} mutableCopy]] mutableCopy];
@@ -71,7 +110,7 @@ static void BackgroundScanTests(void) {
 int main(void) { @autoreleasepool {
     if (![NSProcessInfo.processInfo.arguments containsObject:@"--preview"]) return 2;
     [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    BackgroundScanTests();
+    IgnorePreferencesTests(); BackgroundScanTests();
     AppDelegate *app = [AppDelegate new]; NSApp.delegate = app;
     [app applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
     Check(app.preview && !app.courseWindow, @"preview never starts GitHub checks");

@@ -15,7 +15,7 @@
 
 ## 安装与使用
 
-最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.2.1-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
+最新本机安装包位于 `Releases/`，尚未发布 GitHub Release。包名为 `DDL-Manager-6.3-macOS-arm64.zip`。当前构建使用临时签名，**未经 Apple 公证**。
 
 解压后将 `DDL-Manager.app` 放入“应用程序”。首次打开若被系统阻止，可在“系统设置 → 隐私与安全性”按系统提示选择“仍要打开”。更新前退出正在运行的旧测试版。
 
@@ -71,3 +71,5 @@ zsh verify-homework.sh
 来源与署名见 [原作者与授权记录](docs/ATTRIBUTION.md)；原版用户指南保存在 [原版说明](docs/UPSTREAM_README.md)。
 
 GitHub HTTPS 操作会自动使用 macOS 系统 HTTP/SOCKS 代理。保持 VPN 的系统代理开启即可；支持例外规则。PAC 自动脚本和 SSH 连接需要另行配置或使用 VPN 虚拟网卡模式。
+
+在“课程设置 → 忽略文件类型”中填写 `.pdf, .png` 等后缀，可选择所有课程或当前课程文件夹。单独文件夹的设置优先，可一键恢复全局设置。默认忽略 `.obsidian`、`.venv` 等隐藏文件夹；忽略仅针对尚未跟踪的文件，不删除内容。
